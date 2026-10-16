@@ -107,6 +107,16 @@ player stays as it was; the original traffic and add-ons are one setting away
 - **AI-upscaled HQ graphics** for sprites, roads, HUD, menus and font
   (optional, compressed to about 85 MB)
 
+### Original or AI-upscaled graphics
+
+Whoever wants to enjoy the game the way it looked in 2000 can do just that:
+out of the box it shows the original pixel graphics. For a sharper look there
+is also an AI-upscaled variant of every sprite, road texture, HUD element,
+menu picture and the font, included in this repository. To switch it on,
+open **Preferences** and turn on **AI Rendering** (this also turns on **HQ 4K
+Mode**); turn **AI Rendering** off again to go back to the original graphics
+at any time.
+
 ### LAN in five steps
 
 1. Start the game on every computer (same version on all of them).
