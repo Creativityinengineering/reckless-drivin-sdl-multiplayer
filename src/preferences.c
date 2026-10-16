@@ -82,6 +82,11 @@ static void SetDefaults(void)
     gPrefs.hiColor = 1;     /* we only support 16-bit */
     gPrefs.lineSkip = 0;
     gPrefs.motionBlur = 0;
+    /* AI-upscaled graphics by default: they need HQ 4K mode (fullscreen at
+       twice the resolution). Turn AI Rendering off for the original look. */
+    gPrefs.unused[5] = 1;
+    gPrefs.unused[6] = 1;
+    gPrefs.unused[7] = 1;
 
     /* Default key codes (SDL scancodes stored directly) */
     gPrefs.keyCodes[kForward]  = SDL_SCANCODE_UP;

@@ -105,17 +105,18 @@ player stays as it was; the original traffic and add-ons are one setting away
 - **Extended traffic:** overtaking, jams, panic and road rage after crashes,
   police that hunt whoever rams them
 - **AI-upscaled HQ graphics** for sprites, roads, HUD, menus and font
-  (optional, compressed to about 85 MB)
+  (on by default, compressed to about 85 MB)
 
 ### Original or AI-upscaled graphics
 
-Whoever wants to enjoy the game the way it looked in 2000 can do just that:
-out of the box it shows the original pixel graphics. For a sharper look there
-is also an AI-upscaled variant of every sprite, road texture, HUD element,
-menu picture and the font, included in this repository. To switch it on,
-open **Preferences** and turn on **AI Rendering** (this also turns on **HQ 4K
-Mode**); turn **AI Rendering** off again to go back to the original graphics
-at any time.
+Out of the box the game starts with an AI-upscaled variant of every sprite,
+road texture, HUD element, menu picture and the font, included in this
+repository; it runs fullscreen at twice the original resolution (**HQ 4K
+Mode**). Whoever wants to enjoy the game the way it looked in 2000 can do
+just that: open **Preferences** and turn **AI Rendering** off for the
+original pixel graphics (and **HQ 4K Mode** off for a window). Turning **AI
+Rendering** on again brings the upscaled graphics back at any time. Builds
+without the `AIAssets/` folder simply show the original graphics.
 
 ### LAN in five steps
 
