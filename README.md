@@ -203,10 +203,10 @@ Every theme's mix is shown in the CRATES screen and can be edited there.
 brew install cmake
 
 # Clone repository
-git clone https://github.com/DarrCoh/reckless-drivin-sdl.git
+git clone https://github.com/Creativityinengineering/reckless-drivin-sdl-multiplayer.git
 
 # Build
-cd reckless-drivin-sdl
+cd reckless-drivin-sdl-multiplayer
 ./build-mac-app.sh
 
 # Run (double-click or from terminal)
@@ -224,10 +224,10 @@ Since the app is not notarized, macOS will quarantine it when downloaded. Recipi
 sudo apt install cmake libsdl2-dev
 
 # Clone repository
-git clone https://github.com/DarrCoh/reckless-drivin-sdl.git
+git clone https://github.com/Creativityinengineering/reckless-drivin-sdl-multiplayer.git
 
 # Build
-cd reckless-drivin-sdl
+cd reckless-drivin-sdl-multiplayer
 mkdir build && cd build
 cmake ..
 cmake --build .
@@ -249,10 +249,10 @@ cd vcpkg && bootstrap-vcpkg.bat && cd ..
 vcpkg install sdl2:x64-windows
 
 # Clone repository
-git clone https://github.com/DarrCoh/reckless-drivin-sdl.git
+git clone https://github.com/Creativityinengineering/reckless-drivin-sdl-multiplayer.git
 
 # Build
-cd reckless-drivin-sdl
+cd reckless-drivin-sdl-multiplayer
 cmake -B build -DCMAKE_TOOLCHAIN_FILE=path/to/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build --config Release
 
