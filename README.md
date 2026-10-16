@@ -768,7 +768,7 @@ tools/
 
 **SDL2 port:** [Darren Cohen](https://github.com/DarrCoh)
 
-**Multiplayer Edition:** [Cengineering](https://github.com/Creativityinengineering/Reckless_Drivin) (2026)
+**Multiplayer Edition:** [Cengineering](https://github.com/Creativityinengineering/reckless-drivin-sdl-multiplayer) (2026)
 
 **Built with:** [Claude Code](https://claude.ai/code)
 
