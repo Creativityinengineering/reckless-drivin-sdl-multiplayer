@@ -233,6 +233,23 @@ else()
     )
 endif()
 
+# AI-upscaled graphics (AIAssets/, made by tools/upscale-game-sprites-macos.sh):
+# into the app bundle's Resources on macOS, next to the executable elsewhere.
+# The game falls back to the original graphics when they are missing.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/AIAssets")
+    if(APPLE)
+        set(AI_ASSETS_DEST "$<TARGET_FILE_DIR:RecklessDrivin>/../Resources/AIAssets")
+    else()
+        set(AI_ASSETS_DEST "$<TARGET_FILE_DIR:RecklessDrivin>/AIAssets")
+    endif()
+    add_custom_command(
+        TARGET RecklessDrivin POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/AIAssets" "${AI_ASSETS_DEST}"
+        COMMENT "Copying AI assets next to the game"
+    )
+endif()
+
 # Windows: bundle the MSVC runtime next to the exe so users don't need the
 # Visual C++ Redistributable installed separately. The game is plain C, so
 # only vcruntime140.dll is required (confirmed on a clean Windows 10 install);

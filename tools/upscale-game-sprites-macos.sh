@@ -7,7 +7,9 @@ TOOL_DIR="$BUILD_DIR/ai-upscaler"
 UPSCALER="$TOOL_DIR/realesrgan-ncnn-vulkan"
 ARCHIVE="$TOOL_DIR/realesrgan-ncnn-vulkan-macos.zip"
 RELEASE_URL="https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip"
-ASSET_ROOT="$BUILD_DIR/AIAssets"
+# The finished assets live in the source tree (AIAssets/) and are part of
+# the repository; CMake copies them next to the game when it builds.
+ASSET_ROOT="${ASSET_ROOT:-$ROOT/AIAssets}"
 # ONLY_SPRITES=1 regenerates just the car and scenery sprites.
 ONLY_SPRITES="${ONLY_SPRITES:-0}"
 # ONLY_SCENE=1 regenerates just textures, HUD, menu pictures and the font.

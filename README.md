@@ -314,8 +314,10 @@ avoids the stripe artifacts x4plus adds there; sprites, HUD art and the font
 use the anime model. `ONLY_SPRITES=1` or `ONLY_SCENE=1` before
 `tools/upscale-game-sprites-macos.sh` regenerates just the sprites or just
 the textures, HUD, pictures and font. Close the game before running the
-script: it replaces the app bundles. Generated assets and the upscaler are
-build artifacts and are not part of the source distribution.
+script: it replaces the app bundles. The finished assets are kept in
+`AIAssets/` in the repository, so a fresh clone has them without running the
+upscaler; CMake copies them into the app (or next to the executable) when it
+builds. The upscaler itself and its intermediate files are not included.
 
 The assets are compressed losslessly (a PNG-like average filter, then zlib),
 which takes them from about 340 MB to about 85 MB; the script does this with
