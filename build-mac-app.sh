@@ -33,4 +33,5 @@ sw_version="$(sed -n 's/^project(RecklessDrivin VERSION \([0-9.]*\).*/\1/p' ../C
 ditto RecklessDrivin.app "Reckless Drivin'.app"
 codesign --force --deep --sign - --timestamp=none RecklessDrivin.app
 codesign --force --deep --sign - --timestamp=none "Reckless Drivin'.app"
+rm -f "Reckless-Drivin-$sw_version-mac.dmg"	# hdiutil does not overwrite
 hdiutil create -fs HFS+ -srcfolder "Reckless Drivin'.app" -volname "Reckless Drivin' $sw_version" "Reckless-Drivin-$sw_version-mac.dmg"
