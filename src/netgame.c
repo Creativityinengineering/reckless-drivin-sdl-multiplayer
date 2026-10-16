@@ -705,8 +705,40 @@ static void SendDiscoverTo(UInt32 address)
 		(const struct sockaddr *)&to, (int)sizeof(to));
 }
 
+/* Many WLAN routers, mesh systems and guest networks drop broadcasts
+   between devices while letting direct traffic through. Every other
+   search round therefore also asks each address of the local networks
+   directly (up to a /22, about 1000 addresses). */
+static void SendDiscoverToSubnets(void)
+{
+#ifndef _WIN32
+	struct ifaddrs *interfaces, *entry;
+	if (getifaddrs(&interfaces) != 0)
+		return;
+	for (entry = interfaces; entry; entry = entry->ifa_next) {
+		UInt32 address, mask, network, host, count;
+		if (!entry->ifa_addr || entry->ifa_addr->sa_family != AF_INET ||
+			!entry->ifa_netmask || !(entry->ifa_flags & IFF_UP) ||
+			(entry->ifa_flags & IFF_LOOPBACK))
+			continue;
+		address = ntohl(((struct sockaddr_in *)entry->ifa_addr)->sin_addr.s_addr);
+		mask = ntohl(((struct sockaddr_in *)entry->ifa_netmask)->sin_addr.s_addr);
+		if (mask < 0xFFFFFC00u)
+			mask = 0xFFFFFF00u;	/* bigger networks: just the own /24 */
+		network = address & mask;
+		count = ~mask;
+		for (host = 1; host < count; ++host)
+			SendDiscoverTo(htonl(network | host));	/* own address too: a host here */
+	}
+	freeifaddrs(interfaces);
+#endif
+}
+
 static void SendDiscover(void)
 {
+	static int round;
+	if (round++ % 2 == 0)
+		SendDiscoverToSubnets();
 	SendDiscoverTo(htonl(INADDR_BROADCAST));
 	SendDiscoverTo(htonl(INADDR_LOOPBACK));	/* a host on this computer */
 #ifndef _WIN32
@@ -2158,8 +2190,11 @@ void Explosion(t2DPoint pos, t2DPoint velo, int offs, float mass, int sound);
 static int IsWorldObject(const tObject *object)
 {
 	int slot;
+	/* Short-lived effects are left out, unless an object the clients
+	   already have turned into one: an opened package, a car's burning
+	   wreck. Then they must see it too. */
 	if (object->netLocal || object->replica || !object->type ||
-		object->type->flags & kObjectDieWhenAnimEndsFlag ||
+		(object->type->flags & kObjectDieWhenAnimEndsFlag && !object->netSent) ||
 		object->typeRes == 207 || object->typeRes == 228 ||	/* spikes, brake lights */
 		Network_IsDriverObject(object) || Network_IsRemoteObject(object))
 		return 0;
@@ -2214,6 +2249,7 @@ static void SendWorldTo(int peer)
 			fabsf(object->pos.y - watchY) > kWorldRange) || !IsWorldObject(object))
 			continue;
 		entry = &packet.objects[packet.count];
+		object->netSent = 1;
 		dir = fmodf(object->dir, 2 * PI);
 		if (dir < 0)
 			dir += 2 * PI;

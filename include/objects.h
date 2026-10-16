@@ -129,6 +129,7 @@ typedef struct{
 	UInt16 netId;			/* identifies the object between computers */
 	UInt8 netLocal;			/* never sent: effects, the drivers' own weapons */
 	UInt8 replica;			/* client: a copy of a host object */
+	UInt8 netSent;			/* host: already sent to the clients */
 	UInt32 netSeenMS;		/* replica: arrival of its last state */
 	tNetSample netSamples[kNetSamples];	/* replica: recent states from the host */
 	UInt8 netSampleHead,netSampleCount;

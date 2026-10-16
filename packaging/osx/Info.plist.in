@@ -24,6 +24,8 @@
     <true/>
     <!-- Keep running at full speed in the background: a throttled LAN
          player would stop sending and drop out of the race. -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Reckless Drivin' looks for and connects to other computers on your network for LAN multiplayer races.</string>
     <key>NSAppSleepDisabled</key>
     <true/>
 </dict>
