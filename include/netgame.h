@@ -145,6 +145,7 @@ int Network_GetPackageAmount(void);
 int Network_GetLocalCrateWeight(int kind);
 int Network_GetLocalPackageAmount(void);
 int Network_GetLocalThemeMode(void);
+int Network_GetThemeMode(void);
 int Network_GetLocalThemeWeight(int theme, int kind);
 void Network_SetLocalCrates(const UInt8 *weights, int amount, int themeMode,
 	const UInt8 themeWeights[kCrateThemeCount][kCrateKindCount]);

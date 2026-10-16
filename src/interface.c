@@ -872,6 +872,35 @@ static int ChoosePlayerCount(int minimum, const char *title)
 }
 
 /* Drivers in the LAN lobby with the vehicle each one picked. */
+/* The game settings of this LAN game: mode, crates and packages. They are
+   the host's; a client shows what it received from the host. */
+#define kLobbyPanelH 50
+
+static void DrawLobbySettings(tPixel *fb, int stride, int y, int isClient)
+{
+	static const char *kAmounts[kPackageAmountCount] = {"FEW", "NORMAL", "MORE", "MANY"};
+	int mode = Network_GetGameMode(), themes = Network_GetThemeMode(), kind, enabled = 0;
+	char line[64];
+	if (mode < 0 || mode >= kGameModeCount)
+		mode = 0;
+	for (kind = 0; kind < kCrateKindCount; ++kind)
+		enabled += Network_GetCrateWeight(kind) != kCrateOff;
+	TR_FillRect(fb, stride, 136, y, 368, kLobbyPanelH, kModeColors[mode]);
+	TR_FillRect(fb, stride, 138, y + 2, 364, kLobbyPanelH - 4, kModeShades[mode]);
+	TR_DrawString(fb, stride, 146, y + 6, isClient ? "SET BY THE HOST" : "GAME SETTINGS",
+		COL_GRAY, 1);
+	TR_DrawStringRight(fb, stride, 494, y + 6, kModeNames[mode], kModeColors[mode], 2);
+	if (themes == kThemeRandom)
+		snprintf(line, sizeof(line), "CRATES: RANDOM THEMES");
+	else if (themes >= kThemeFixed)
+		snprintf(line, sizeof(line), "CRATES: THEME %s", kCrateThemes[themes - kThemeFixed].name);
+	else
+		snprintf(line, sizeof(line), "CRATES: %d OF %d ON", enabled, kCrateKindCount);
+	TR_DrawString(fb, stride, 146, y + 24, line, COL_WHITE, 1);
+	snprintf(line, sizeof(line), "PACKAGES: %s", kAmounts[Network_GetPackageAmount()]);
+	TR_DrawString(fb, stride, 146, y + 36, line, COL_WHITE, 1);
+}
+
 static void DrawLobbyDrivers(tPixel *fb, int stride, int y)
 {
 	int slot;
@@ -918,6 +947,9 @@ static void DrawLanViewChoice(tPixel *fb, int stride, int y)
 		COL_CYAN, 1);
 }
 
+#define kHostPickerY 234
+#define kHostStartY 316
+
 static void DrawLanLobby(int targetPlayers, int connectedPlayers)
 {
 	int rowBytes, stride;
@@ -926,39 +958,40 @@ static void DrawLanLobby(int targetPlayers, int connectedPlayers)
 		return;
 	stride = rowBytes/4;
 	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
-	TR_FillRect(fb, stride, 112, 88, 416, 308, COL_DKGRAY);
-	TR_FillRect(fb, stride, 116, 92, 408, 300, COL_BAR_BG);
-	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 114,
+	TR_FillRect(fb, stride, 112, 52, 416, 374, COL_DKGRAY);
+	TR_FillRect(fb, stride, 116, 56, 408, 366, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 66,
 		"LAN GAME LOBBY", COL_YELLOW, 2);
 	{
 		char status[48];
 		snprintf(status, sizeof(status), "CONNECTED: %d / %d",
 			connectedPlayers, targetPlayers);
-		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 140,
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 90,
 			status, connectedPlayers >= targetPlayers ? COL_GREEN : COL_YELLOW, 1);
 	}
-	DrawLobbyDrivers(fb, stride, 158);
-	DrawVehiclePicker(fb, stride, 226);
+	DrawLobbySettings(fb, stride, 106, 0);
+	DrawLobbyDrivers(fb, stride, 166);
+	DrawVehiclePicker(fb, stride, kHostPickerY);
 	{
 		char address[16], line[56];
 		if (Network_GetLocalAddress(address, sizeof(address)))
 			snprintf(line, sizeof(line), "OTHERS: JOIN LAN GAME (OR IP %s)", address);
 		else
 			snprintf(line, sizeof(line), "OTHERS: CHOOSE JOIN LAN GAME");
-		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 278, line, COL_GRAY, 1);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 286, line, COL_GRAY, 1);
 	}
-	DrawLanViewChoice(fb, stride, 291);
+	DrawLanViewChoice(fb, stride, 300);
 	if (connectedPlayers >= targetPlayers) {
-		TR_FillRect(fb, stride, 216, 304, 208, 40, COL_BAR_FG);
-		TR_FillRect(fb, stride, 218, 306, 204, 36, 0x7FE0);
-		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 318,
+		TR_FillRect(fb, stride, 216, kHostStartY, 208, 40, COL_BAR_FG);
+		TR_FillRect(fb, stride, 218, kHostStartY + 2, 204, 36, 0x7FE0);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, kHostStartY + 14,
 			"START RACE", COL_BLACK, 1);
 	} else {
-		TR_FillRect(fb, stride, 216, 304, 208, 40, COL_DKGRAY);
-		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 318,
+		TR_FillRect(fb, stride, 216, kHostStartY, 208, 40, COL_DKGRAY);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, kHostStartY + 14,
 			"WAITING FOR PLAYERS", COL_GRAY, 1);
 	}
-	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 360,
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 400,
 		"ESC  CANCEL", COL_GRAY, 1);
 	Platform_Blit2Screen();
 }
@@ -978,7 +1011,7 @@ static int WaitForLanPlayers(int targetPlayers)
 		DrawLanLobby(targetPlayers, connected);
 		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
 			return 0;
-		HandleVehiclePicker(-1, -1, 226);
+		HandleVehiclePicker(-1, -1, kHostPickerY);
 		if (Platform_WasKeyPressed(SDL_SCANCODE_V))
 			Prefs_ToggleLanScreen();
 		if ((Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
@@ -986,11 +1019,11 @@ static int WaitForLanPlayers(int targetPlayers)
 			connected >= targetPlayers)
 			return 1;
 		if (Platform_GetMouseClick(&x, &y)) {
-			HandleVehiclePicker(x, y, 226);
-			if (y >= 304 && y < 344 && x >= 216 && x < 424 &&
+			HandleVehiclePicker(x, y, kHostPickerY);
+			if (y >= kHostStartY && y < kHostStartY + 40 && x >= 216 && x < 424 &&
 				connected >= targetPlayers)
 				return 1;
-			if (y >= 350 && y < 374)
+			if (y >= 394 && y < 414)
 				return 0;
 		}
 		SDL_Delay(16);
@@ -1088,6 +1121,8 @@ static int ChooseLanHost(char *address, size_t capacity)
 	return choice;
 }
 
+#define kClientPickerY 248
+
 static void DrawClientLobby(const char *address, UInt64 waitedMS)
 {
 	int rowBytes, stride;
@@ -1097,20 +1132,21 @@ static void DrawClientLobby(const char *address, UInt64 waitedMS)
 		return;
 	stride = rowBytes/4;
 	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
-	TR_FillRect(fb, stride, 112, 88, 416, 308, COL_DKGRAY);
-	TR_FillRect(fb, stride, 116, 92, 408, 300, COL_BAR_BG);
-	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 114,
+	TR_FillRect(fb, stride, 112, 52, 416, 374, COL_DKGRAY);
+	TR_FillRect(fb, stride, 116, 56, 408, 366, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 66,
 		"JOIN LAN GAME", COL_YELLOW, 2);
 	snprintf(line, sizeof(line), "HOST: %s", address);
-	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 150, line, COL_WHITE, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 90, line, COL_WHITE, 1);
 	if (Network_GetLocalSlot() > 0) {
 		snprintf(line, sizeof(line), "CONNECTED AS DRIVER %d", Network_GetLocalSlot() + 1);
-		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 166, line, COL_GREEN, 1);
-		DrawLobbyDrivers(fb, stride, 186);
-		DrawVehiclePicker(fb, stride, 256);
-		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 310,
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 104, line, COL_GREEN, 1);
+		DrawLobbySettings(fb, stride, 120, 1);
+		DrawLobbyDrivers(fb, stride, 180);
+		DrawVehiclePicker(fb, stride, kClientPickerY);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 306,
 			"WAITING FOR THE HOST TO START THE RACE", COL_YELLOW, 1);
-		DrawLanViewChoice(fb, stride, 330);
+		DrawLanViewChoice(fb, stride, 326);
 	} else {
 		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 194,
 			"CONNECTING...", COL_YELLOW, 2);
@@ -1123,7 +1159,7 @@ static void DrawClientLobby(const char *address, UInt64 waitedMS)
 				"ALLOW INCOMING CONNECTIONS FOR THE GAME?", COL_WHITE, 1);
 		}
 	}
-	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 360,
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 400,
 		"ESC  CANCEL", COL_GRAY, 1);
 	Platform_Blit2Screen();
 }
@@ -1145,9 +1181,9 @@ static int WaitInClientLobby(const char *address)
 		{
 			int x = -1, y = -1;
 			int clicked = Platform_GetMouseClick(&x, &y);
-			if (clicked && y >= 352 && y < 372)
+			if (clicked && y >= 394 && y < 414)
 				return 0;
-			HandleVehiclePicker(x, y, 256);
+			HandleVehiclePicker(x, y, kClientPickerY);
 			if (Platform_WasKeyPressed(SDL_SCANCODE_V))
 				Prefs_ToggleLanScreen();
 		}

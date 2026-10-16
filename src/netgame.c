@@ -47,7 +47,7 @@ typedef socklen_t NetworkSockLen;
 #endif
 
 #define kNetworkMagic 0x52444d50u
-#define kNetworkVersion 15
+#define kNetworkVersion 16
 #define kNetworkIntervalMS 50
 #define kNetworkTimeoutMS 10000
 
@@ -146,6 +146,7 @@ typedef struct {
 	UInt8 raceHold;	/* host's race clock stands (waiting, or everyone finished) */
 	UInt8 packageAmount;	/* host's crate settings */
 	SInt8 theme;	/* this level's random theme, -1 = none */
+	UInt8 themeMode;	/* host's theme setting, shown in the client lobby */
 	UInt8 crateWeights[kCrateKindCount];
 	float raceTime;	/* host's race clock, negative during the countdown */
 	tNetworkPlayer players[kNetworkMaxPlayers];
@@ -585,6 +586,7 @@ static void SendHostState(void)
 		for (kind = 0; kind < kCrateKindCount; ++kind)
 			packet.crateWeights[kind] = (UInt8)Network_GetCrateWeight(kind);
 		packet.theme = (SInt8)sThemeIndex;
+		packet.themeMode = (UInt8)Network_GetLocalThemeMode();
 	}
 	packet.packageAmount = (UInt8)Network_GetLocalPackageAmount();
 	packet.raceHold = sRaceHolding;
@@ -1238,6 +1240,13 @@ static int sCratesLoaded;
 static int sThemeIndex = -1;	/* host: this level's theme */
 static UInt8 sHostWeights[kCrateKindCount];	/* LAN client: the host's */
 static int sHostTheme = -1, sShownTheme = -1;
+static int sHostThemeMode;	/* LAN client: the host's theme setting */
+
+/* The theme setting that applies: on a LAN client the host's. */
+int Network_GetThemeMode(void)
+{
+	return Network_IsClient() ? sHostThemeMode : Network_GetLocalThemeMode();
+}
 
 static const char *CrateFilePath(void)
 {
@@ -3028,6 +3037,8 @@ static void ProcessClientPacket(const tNetworkPacket *packet, const struct socka
 	sHostMode = packet->duel < kGameModeCount ? packet->duel : kGameModeCoop;
 	memcpy(sHostWeights, packet->crateWeights, sizeof(sHostWeights));
 	sHostTheme = packet->theme;
+	sHostThemeMode = packet->themeMode < kThemeFixed + kCrateThemeCount ?
+		packet->themeMode : kThemeOff;
 	/* Show the host's theme once per level. */
 	if (gGameOn && !levelChanged && sHostTheme >= 0 && sHostTheme < kCrateThemeCount &&
 		sHostTheme != sShownTheme) {
