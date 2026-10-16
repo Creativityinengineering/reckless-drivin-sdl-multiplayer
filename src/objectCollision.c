@@ -2,6 +2,9 @@
 #include <math.h>
 #include <stdio.h>
 #include "objects.h"
+#include "netgame.h"
+#include "extended.h"
+#include "preferences.h"
 #include "screen.h"
 #include "vec2d.h"
 #include "trig.h"
@@ -171,11 +174,42 @@ void MakeDebris(tObject *theObj,int damagePos,float damage,float maxDamage)
 				break;
 		}
 		if(debrisObj)
+			debrisObj->netLocal=1;
+		if(debrisObj)
 			debrisObj->velo=VEC2D_Sum(theObj->velo,P2D(sin(debrisObj->dir)*10,cos(debrisObj->dir)*10));
 	}
 }
 
 void Explosion(t2DPoint pos,t2DPoint velo,int offs,float mass,int sound);
+
+/* The dent a hit at damagePos leaves in an object's sprite; also used to
+   show the damage another computer reports. */
+int DamageLookFrame(tObject *theObj,int frame,int damagePos,float amount)
+{
+	tObjectTypePtr objType=theObj->type;
+	float xSize=(*objType).width*kScale,ySize=(*objType).length*kScale;
+	switch(damagePos)
+	{					
+		case kFrontBumper:
+		case kMotor:
+			return YDistortSprite(frame,-xSize,xSize,-ySize-1,-ySize+10,0,amount);
+		case kBackBumper:
+			return YDistortSprite(frame,-xSize,xSize,ySize-10,ySize+1,1,amount);
+		case kFrontLeftTire:
+			return XDistortSprite(frame,-ySize,-ySize*0.3,-xSize-1,-xSize+10,0,amount);
+		case kFrontRightTire:				
+			return XDistortSprite(frame,-ySize,-ySize*0.3,xSize-10,xSize+1,1,amount);
+		case kBackLeftTire:				
+			return XDistortSprite(frame,ySize*0.3,ySize,-xSize-1,-xSize+10,0,amount);
+		case kBackRightTire:				
+			return XDistortSprite(frame,ySize*0.3,ySize,xSize-10,xSize+1,1,amount);
+		case kLeftDoor:
+			return XDistortSprite(frame,-ySize*0.4,ySize*0.4,-xSize-1,-xSize+10,0,amount);
+		case kRightDoor:
+			return XDistortSprite(frame,-ySize*0.4,ySize*0.4,xSize-10,xSize+1,1,amount);
+	}
+	return frame;
+}
 
 void DamageObj(tObject *theObj,float damage,t2DPoint diff)
 {
@@ -199,33 +233,14 @@ void DamageObj(tObject *theObj,float damage,t2DPoint diff)
 			{if(theObj->damage>maxDamage*0.75) theObj->damageFlags|=damagePos;else return;}
 		else
 			theObj->damageFlags|=damagePos;
-		switch(damagePos)
-		{					
-			case kFrontBumper:
-			case kMotor:
-				theObj->frame=YDistortSprite(theObj->frame,-xSize,xSize,-ySize-1,-ySize+10,0,damage/maxDamage*20);
-				break;	
-			case kBackBumper:
-				theObj->frame=YDistortSprite(theObj->frame,-xSize,xSize,ySize-10,ySize+1,1,damage/maxDamage*20);
-				break;	
-			case kFrontLeftTire:
-				theObj->frame=XDistortSprite(theObj->frame,-ySize,-ySize*0.3,-xSize-1,-xSize+10,0,damage/maxDamage*20);
-				break;	
-			case kFrontRightTire:				
-				theObj->frame=XDistortSprite(theObj->frame,-ySize,-ySize*0.3,xSize-10,xSize+1,1,damage/maxDamage*20);
-				break;	
-			case kBackLeftTire:				
-				theObj->frame=XDistortSprite(theObj->frame,ySize*0.3,ySize,-xSize-1,-xSize+10,0,damage/maxDamage*20);
-				break;	
-			case kBackRightTire:				
-				theObj->frame=XDistortSprite(theObj->frame,ySize*0.3,ySize,xSize-10,xSize+1,1,damage/maxDamage*20);
-				break;	
-			case kLeftDoor:
-				theObj->frame=XDistortSprite(theObj->frame,-ySize*0.4,ySize*0.4,-xSize-1,-xSize+10,0,damage/maxDamage*20);
-				break;	
-			case kRightDoor:
-				theObj->frame=XDistortSprite(theObj->frame,-ySize*0.4,ySize*0.4,xSize-10,xSize+1,1,damage/maxDamage*20);
-				break;						
+		theObj->frame=DamageLookFrame(theObj,theObj->frame,damagePos,damage/maxDamage*20);
+		{
+			/* Remembered, so other computers can make the same dent. */
+			int bit=0;
+			float amount=damage/maxDamage*20*12;
+			while(bit<8&&!(damagePos&(1<<bit)))
+				bit++;
+			theObj->dentAmount[bit]=(UInt8)(amount>255?255:amount);
 		}
 		MakeDebris(theObj,damagePos,damage,maxDamage);
 	}
@@ -252,7 +267,7 @@ void DoBounce(tObject *obj1,tObject *obj2,t2DPoint diff)
 	obj1->velo=new1Velo;
 	obj2->velo=new2Velo;
 	if(obj1==gPlayerObj||obj2==gPlayerObj)
-		if(gPlayerAddOns&kAddOnSpikes)
+		if(gCurPlayer->addOns&kAddOnSpikes)
 		{
 			if(fabs(VEC2D_DotProduct(diff,P2D(sin(gPlayerObj->dir),cos(gPlayerObj->dir))))<0.3)
 				if(obj1==gPlayerObj)
@@ -353,81 +368,258 @@ void BounceObjects(tObject *obj1,tObject *obj2)
 	DoBounce(obj1,obj2,diff);    
 }
 
+/* Pickup names appear small at the top of the view; quick pickups stack
+   in rows below each other instead of overlapping. */
+#define kPickupTextFrames 120
+
+static void PickupText(tTextEffect *fx)
+{
+	if(gCurPlayer->pickupTextFrame&&gFrameCount<gCurPlayer->pickupTextFrame+kPickupTextFrames)
+		gCurPlayer->pickupTextRow=(gCurPlayer->pickupTextRow+1)%3;
+	else
+		gCurPlayer->pickupTextRow=0;
+	fx->y=60+gCurPlayer->pickupTextRow*22;
+	fx->effectFlags=kEffectSmall;
+	gCurPlayer->pickupTextFrame=gFrameCount;
+	NewTextEffect(fx);
+}
+
+/* A crate kind by frequency (off 0, rare 1, normal 2, often 4), leaving out
+   the kinds in excluded; -1 when none is left. */
+static int PickCrateKind(const int *weights,UInt32 excluded)
+{
+	int kind,total=0,pick;
+	for(kind=0;kind<kCrateKindCount;kind++)
+		if(!(excluded&(1u<<kind)))
+			total+=weights[kind];
+	if(total<=0)
+		return -1;
+	pick=RanInt(0,total);
+	for(kind=0;kind<kCrateKindCount;kind++)
+		if(!(excluded&(1u<<kind)))
+		{
+			pick-=weights[kind];
+			if(pick<0)
+				return kind;
+		}
+	return -1;
+}
+
 void BonusObject(tObject *theObj)
 {
 	tObjectTypePtr objType=theObj->type;
-	if((*objType).flags2&kObjectAddOnFlag)
+	/* Games from the multiplayer menu use its crate settings (frequencies,
+	   or the level's theme); otherwise the original add-ons, plus the new
+	   ones in extended mode. */
+	static const int kWeightValues[kCrateWeightCount]={0,1,2,4};
+	int weights[kCrateKindCount],kind;
+	for(kind=0;kind<kCrateKindCount;kind++)
+	{
+		if(Network_UsesCrateSettings())
+			weights[kind]=kWeightValues[Network_GetCrateWeight(kind)];
+		else if(kind==kCrateKindSwarm||kind==kCrateKindJam)
+			weights[kind]=0;
+		else
+			weights[kind]=kind<kCrateKindGrip||Prefs_IsExtendedMode()?2:0;
+	}
+	if((*objType).flags2&kObjectAddOnFlag&&Network_IsTrailingDriver(gPlayerObj)&&
+		RanInt(0,2)==0)
+	{
+		/* Catch-up help: drivers far behind the leader often get extra ammo. */
+		tTextEffect fx={320,240,kEffectExplode,0,"\x0e" "WEAPONShBOOSTe"};
+		PickupText(&fx);
+		gCurPlayer->missiles+=5;
+		gCurPlayer->mines+=5;
+	}
+	else if((*objType).flags2&kObjectAddOnFlag)
 	{
 		int ok=false;
+		UInt32 excluded=0;
 		do{
-			switch(RanInt(0,8))
+			/* A kind that cannot be had right now (e.g. a second jammer) is
+			   left out and another one drawn; with none left, points. */
+			int kind=PickCrateKind(weights,excluded);
+			if(kind<0)
+				kind=kCrateKindPoints;
+			excluded|=1u<<kind;
+			switch(kind)
 			{
+				case kCrateKindSwarm:
+				case kCrateKindJam:
+					/* Set off at once: against the race leader, in package
+					   mode the swarm against the driver who picked it up. */
+					if(Network_TriggerCrate(gPlayerObj,
+						kind==kCrateKindSwarm?kCrateCopSwarm:kCrateTrafficJam))
+					{
+						tTextEffect swarm={320,240,kEffectExplode,0,"\x0a" "COPhSWARMe"};
+						tTextEffect jam={320,240,kEffectExplode,0,"\x0c" "TRAFFIChJAMe"};
+						PickupText(kind==kCrateKindSwarm?&swarm:&jam);
+						SimplePlaySound(141);
+						ok=true;
+					}
+					break;
 				case 0:
-					if(!(gPlayerAddOns&kAddOnLock))
+					if(!(gCurPlayer->addOns&kAddOnLock))
 					{
 						tTextEffect fx={320,240,kEffectSinLines+kEffectMoveLeft,0,"\x0e" "ADDONShLOCKEDf"};
-						NewTextEffect(&fx);
-						gPlayerAddOns|=kAddOnLock;
+						PickupText(&fx);
+						gCurPlayer->addOns|=kAddOnLock;
 						ok=true;
 					}
 					break;
 				case 1:
 					{
 						tTextEffect fx={320,240,kEffectSinLines+kEffectMoveDown,0,"\x07MINESee"};
-						NewTextEffect(&fx);
-						gNumMines+=5;
+						PickupText(&fx);
+						gCurPlayer->mines+=5;
 						ok=true;
 					}
 					break;
 				case 2:
 					{
 						tTextEffect fx={320,240,kEffectExplode,0,"\x09MISSILESe"};
-						NewTextEffect(&fx);
-						gNumMissiles+=5;
+						PickupText(&fx);
+						gCurPlayer->missiles+=5;
 						ok=true;
 					}
 					break;
 				case 3:
-					if(!(gPlayerAddOns&kAddOnSpikes))
+					if(!(gCurPlayer->addOns&kAddOnSpikes))
 					{
 						tTextEffect fx={320,240,kEffectExplode,0,"\x07SPIKESe"};
-						NewTextEffect(&fx);
-						gPlayerAddOns|=kAddOnSpikes;
+						PickupText(&fx);
+						gCurPlayer->addOns|=kAddOnSpikes;
 						ok=true;
 					}
 					break;
 				case 4:
-					if(!(gPlayerAddOns&kAddOnCop))
+					/* No jammer while a cop swarm hunts this driver. */
+					if(!(gCurPlayer->addOns&kAddOnCop)&&!Network_SwarmHunts(gPlayerObj))
 					{
 						tTextEffect fx={320,240,kEffectSinLines,0,"\x0d" "POLICEhJAMMER"};
-						NewTextEffect(&fx);
-						gPlayerAddOns|=kAddOnCop;
+						PickupText(&fx);
+						gCurPlayer->addOns|=kAddOnCop;
 						ok=true;
 					}
 					break;
 				case 5:
-					if(!(gPlayerAddOns&kAddOnTurbo))
+					if(!(gCurPlayer->addOns&kAddOnTurbo))
 					{
 						tTextEffect fx={320,240,kEffectExplode,0,"\x0f" "TURBOhENGINEeee"};
-						NewTextEffect(&fx);
-						gPlayerAddOns|=kAddOnTurbo;
+						PickupText(&fx);
+						gCurPlayer->addOns|=kAddOnTurbo;
 						ok=true;
 					}
 					break;
 				case 6:
 					{
 						tTextEffect fx={320,240,kEffectExplode,0,"\x0d" "][[[hAWARDEDf"};
-						NewTextEffect(&fx);
-						gPlayerScore+=2000;
+						PickupText(&fx);
+						gCurPlayer->score+=2000;
 						ok=true;
 					}
 					break;
 				case 7:
 					{
 						tTextEffect fx={320,240,kEffectSinLines+kEffectMoveUp,0,"\x0c" "EXTRAhLIFEee"};
-						NewTextEffect(&fx);
-						gPlayerLives++;
+						PickupText(&fx);
+						gCurPlayer->lives++;
 						SimplePlaySound(154);
+						ok=true;
+					}
+					break;
+				case 8:
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x0a" "SUPERhGRIP"};
+						PickupText(&fx);
+						gCurPlayer->gripTime=15;
+						ok=true;
+					}
+					break;
+				case 9:
+					if(!(*gRoadInfo).water)
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x0d" "OFFROADhTYRES"};
+						PickupText(&fx);
+						gCurPlayer->offroadTime=15;
+						ok=true;
+					}
+					break;
+				case 10:
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x06" "MAGNET"};
+						PickupText(&fx);
+						gCurPlayer->magnetTime=15;
+						ok=true;
+					}
+					break;
+				case 11:
+					if(!gCurPlayer->shield)
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x06" "SHIELD"};
+						PickupText(&fx);
+						gCurPlayer->shield=1;
+						ok=true;
+					}
+					break;
+				case 12:
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x0d" "BATTERINGhRAM"};
+						PickupText(&fx);
+						gCurPlayer->ramTime=15;
+						ok=true;
+					}
+					break;
+				case 13:
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x09" "OILhSLICK"};
+						PickupText(&fx);
+						gCurPlayer->oilTime=15;
+						ok=true;
+					}
+					break;
+				case 14:
+					if(!(*gRoadInfo).water)
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x05" "NITRO"};
+						PickupText(&fx);
+						gCurPlayer->nitroTime=15;
+						SimplePlaySound(141);
+						ok=true;
+					}
+					break;
+				case 15:
+					/* Rain only makes sense with someone else to hit. */
+					if(Network_IsActive()&&Network_GetPlayerCount()>1)
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x0a" "RAINhMAKER"};
+						PickupText(&fx);
+						gCurPlayer->rainTime=15;
+						ok=true;
+					}
+					break;
+				case 16:
+					{
+						/* The others are hunted; alone, it is you. */
+						tTextEffect fx={320,240,kEffectExplode,0,"\x0b" "ZOMBIEhCARS"};
+						PickupText(&fx);
+						gCurPlayer->zombieTime=15;
+						ok=true;
+					}
+					break;
+				case kCrateKindWar:
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x07" "CARhWAR"};
+						PickupText(&fx);
+						gCurPlayer->warTime=15;
+						ok=true;
+					}
+					break;
+				case kCrateKindDodge:
+					{
+						tTextEffect fx={320,240,kEffectExplode,0,"\x0a" "CLEARhROAD"};
+						PickupText(&fx);
+						gCurPlayer->dodgeTime=15;
 						ok=true;
 					}
 					break;
@@ -435,8 +627,68 @@ void BonusObject(tObject *theObj)
 		}while(!ok);
 	}
 	else
-		gPlayerBonus=theObj->frame-(*objType).frame+2;
+		gCurPlayer->bonus=theObj->frame-(*objType).frame+2;
 	KillObject(theObj);
+}
+
+static int IsAnyDriver(const tObject *obj)
+{
+	return obj==gPlayerObj||Network_IsDriverObject(obj);
+}
+
+/* Battering ram crate: the rammed car flies off and explodes, and the
+   driver is not slowed down. */
+static int RamCollision(tObject *a,tObject *b)
+{
+	tObject *rammer,*victim;
+	t2DPoint away;
+	if(Network_DriverRamming(a)&&!IsAnyDriver(b)) {rammer=a;victim=b;}
+	else if(Network_DriverRamming(b)&&!IsAnyDriver(a)) {rammer=b;victim=a;}
+	else return false;
+	if(!(victim->type->flags&kObjectWheelFlag))
+		return false;	/* walls and trees still stop the car */
+	away=VEC2D_Norm(VEC2D_Difference(victim->pos,rammer->pos));
+	victim->velo=VEC2D_Sum(rammer->velo,VEC2D_Scale(away,30));
+	victim->rotVelo=RanProb(0.5)?8:-8;
+	Network_KillObjectFor(victim,rammer);
+	return true;
+}
+
+/* Car war crate: a car that hits its enemy shoves it sideways towards the
+   nearer edge of the road, into the ditch. */
+static void WarShove(tObject *a,tObject *b)
+{
+	tObject *attacker=a->warUntil>gFrameCount&&a->warTargetId==b->netId?a:
+		(b->warUntil>gFrameCount&&b->warTargetId==a->netId?b:nil);
+	tObject *enemy=attacker==a?b:a;
+	tRoad road;
+	int index;
+	if(!attacker)
+		return;
+	index=(int)(enemy->pos.y/2);
+	if(index<0||index>=(int)*gRoadLenght)
+		return;
+	road=gRoadData+index;
+	enemy->velo.x+=(enemy->pos.x<((*road)[0]+(*road)[3])/2?-18:18);
+	enemy->rotVelo+=RanProb(0.5)?3:-3;
+}
+
+/* Drivers who ram a cop have it on their tail; one that came the other
+   way turns round. */
+static void CopRammed(tObject *a,tObject *b)
+{
+	tObject *cop=IsAnyDriver(a)?b:a,*driver=cop==a?b:a;
+	if(!IsAnyDriver(driver)||IsAnyDriver(cop)||cop->replica||
+		!(cop->type->flags&kObjectCop)||cop->type->flags&kObjectHeliFlag)
+		return;
+	cop->chaseTarget=driver;
+	if(cop->control!=kObjectCopControl)
+	{
+		cop->control=kObjectCopControl;
+		for(cop->target=0;
+			cop->target<gTrackUp->num-1&&gTrackUp->track[cop->target].y<cop->pos.y;
+			cop->target++);
+	}
 }
 
 void HandleCollision(tObject *posObj)
@@ -457,9 +709,17 @@ void HandleCollision(tObject *posObj)
 						if((*posObj->type).flags2&kObjectMissile){
 							posObj->jumpHeight=0;
 							posObj->jumpVelo=0;
-							KillObject(theObj);
-						}else
+							if(!Network_IsDriverObject(theObj))
+								Network_KillObjectFor(theObj,(tObject*)posObj->shooter);
+							else
+								Network_HitDriver(theObj,(tObject*)posObj->shooter);
+						}else if(!RamCollision(posObj,theObj))
+						{
+							WarShove(posObj,theObj);
+							CopRammed(posObj,theObj);
+							Extended_Crash(theObj,posObj);
 						 	BounceObjects(theObj,posObj);
+						}
 					}
 					if(VEC2D_Value(posObj->velo)>kMinJumpVelo)
 					{
@@ -472,7 +732,7 @@ void HandleCollision(tObject *posObj)
 						{
 							tTextEffect fx;
 							Str31 str;
-							gPlayerScore+=jumpScore;
+							gCurPlayer->score+=jumpScore;
 							{
 								char tmp[16];
 								int len = sprintf(tmp, "%d", jumpScore);
@@ -487,17 +747,32 @@ void HandleCollision(tObject *posObj)
 						}
 					}
 					if(theObj->type->flags&kObjectKillsCars)
-						KillObject(posObj);
+					{
+						if(theObj->shooter&&
+							Network_IsDriverObject(posObj)&&
+							Network_IsDriverObject((tObject*)theObj->shooter))
+							Network_HitDriver(posObj,(tObject*)theObj->shooter);
+						else if(theObj->shooter&&!Network_IsDriverObject(posObj))
+							Network_KillObjectFor(posObj,(tObject*)theObj->shooter);
+						else
+							KillObject(posObj);
+					}
 					if(theObj->type->flags&kObjectKilledByCars)
 						KillObject(theObj);
 					if((*theObj->type).flags2&kObjectOil)
+					{
+						/* Oil slick crate: its oil spins even a car driving
+						   straight. */
+						if(theObj->shooter&&fabs(posObj->rotVelo)<=0.2)
+							posObj->rotVelo=(RanProb(0.5)?0.3:-0.3);
 						posObj->rotVelo=(fabs(posObj->rotVelo)>0.2?1:0)*(posObj->rotVelo>0?1:-1)*PI*0.05*VEC2D_Value(posObj->velo);
+					}
 					if(posObj==gPlayerObj)
 					{
 						if((*theObj->type).flags&kObjectBonusFlag)
 							BonusObject(theObj);
 					}
-					else if(theObj==gSpikeObj)
+					else if(theObj==gCurPlayer->spikeObj)
 						if(posObj->type->flags2&kObjectDamageble)
 						{
 							DamageObj(posObj,VEC2D_Value(gPlayerObj->velo)*kLowFrameDuration*9,VEC2D_Norm(VEC2D_Difference(theObj->pos,posObj->pos)));

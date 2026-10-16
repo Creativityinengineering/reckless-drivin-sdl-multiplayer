@@ -21,7 +21,7 @@
 /* ======================================================================== */
 
 Ptr    gBaseAddr;
-short  gRowBytes;
+int    gRowBytes;
 short  gXSize = 640, gYSize = 480;
 int    gOddLines;
 Handle gTranslucenceTab = nil, g16BitClut = nil;
@@ -38,10 +38,12 @@ void InitScreen(void)
     int rowBytes;
 
     Platform_InitScreen();
+    gXSize = (short)Platform_GetRenderWidth();
+    gYSize = (short)Platform_GetRenderHeight();
 
-    UInt16 *buffer = Platform_GetFramebuffer(&rowBytes);
+    tPixel *buffer = Platform_GetFramebuffer(&rowBytes);
     gBaseAddr = (Ptr)buffer;
-    gRowBytes = (short)rowBytes;
+    gRowBytes = rowBytes;
     gScreenMode = kScreenSuspended;
 }
 
@@ -55,9 +57,9 @@ void ScreenMode(int mode)
     switch (mode) {
     case kScreenRunning: {
         int rowBytes;
-        UInt16 *buffer = Platform_GetFramebuffer(&rowBytes);
+        tPixel *buffer = Platform_GetFramebuffer(&rowBytes);
         gBaseAddr = (Ptr)buffer;
-        gRowBytes = (short)rowBytes;
+        gRowBytes = rowBytes;
         if (gScreenMode == kScreenSuspended)
             SetScreenClut(8);
         break;

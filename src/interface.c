@@ -10,6 +10,9 @@
 #include "resources.h"
 #include "register.h"
 #include "platform.h"
+#include "netgame.h"
+#include "textrender.h"
+#include "hqassets.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -21,6 +24,7 @@ enum{
 	kHelpButton,
 	kQuitButton,
 	kRegisterButton,
+	kMultiplayerButton,
 	kAboutButton
 };
 
@@ -31,15 +35,20 @@ unsigned char gLevelFileName[64];
 static int gInterfaceInited=false;
 
 /* Menu image buffers for hover/press visual feedback */
-static UInt16 sMenuNormal[SCREEN_WIDTH * SCREEN_HEIGHT];
-static UInt16 sMenuHover[SCREEN_WIDTH * SCREEN_HEIGHT];
-static UInt16 sMenuPressed[SCREEN_WIDTH * SCREEN_HEIGHT];
+static tPixel sMenuNormal[SCREEN_WIDTH * PLATFORM_MAX_RENDER_SCALE *
+	SCREEN_HEIGHT * PLATFORM_MAX_RENDER_SCALE];
+static tPixel sMenuHover[SCREEN_WIDTH * PLATFORM_MAX_RENDER_SCALE *
+	SCREEN_HEIGHT * PLATFORM_MAX_RENDER_SCALE];
+static tPixel sMenuPressed[SCREEN_WIDTH * PLATFORM_MAX_RENDER_SCALE *
+	SCREEN_HEIGHT * PLATFORM_MAX_RENDER_SCALE];
 static int sMenuImagesLoaded = 0;
 static int sHoverButton = -1; /* which button the mouse is currently over */
+extern void ConfigureInput(void);
 
 /* Button hit rectangles from the original 'Recs' resource id=1000.
  * Each entry is {top, left, bottom, right} in 640x480 coordinates.
- * Order matches the button enum: Start, Prefs, Scores, Help, Quit, Register. */
+ * Order matches the button enum: Start, Prefs, Scores, Help, Quit, Register,
+ * Multiplayer. */
 typedef struct { int top, left, bottom, right; } ButtonRect;
 static const ButtonRect kButtonRects[] = {
 	{105, 389, 202, 588},  /* kStartGameButton */
@@ -48,8 +57,10 @@ static const ButtonRect kButtonRects[] = {
 	{284, 433, 352, 563},  /* kHelpButton      */
 	{392, 470, 458, 601},  /* kQuitButton      */
 	{231, 257, 297, 389},  /* kRegisterButton  */
+	{372, 270, 450, 422},  /* kMultiplayerButton */
 };
 #define kNumButtons (sizeof(kButtonRects) / sizeof(kButtonRects[0]))
+#define kMultiplayerPort 33777
 
 static int HitTestButtons(int x, int y)
 {
@@ -63,33 +74,38 @@ static int HitTestButtons(int x, int y)
 
 /* Forward declaration — ShowPicScreen is defined later in this file */
 void ShowPicScreen(int id);
+static void RestoreMenuScreen(void);
 
 /* ======================================================================== */
 /* Menu image helpers for hover/press states                                 */
 /* ======================================================================== */
 
-/* Load a PPic into a 640x480 pixel buffer by rendering to the framebuffer
+/* Load a PPic into a render-sized buffer by rendering to the framebuffer
  * and copying. Returns 1 on success. */
-static int LoadPPicToBuffer(int ppicId, UInt16 *buf)
+static int LoadPPicToBuffer(int ppicId, tPixel *buf)
 {
 	int rowBytes;
-	UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
 	ShowPicScreen(ppicId);
-	memcpy(buf, fb, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(UInt16));
+	memcpy(buf, fb, (size_t)(rowBytes/4) * Platform_GetRenderHeight() *
+		sizeof(tPixel));
 	return 1;
 }
 
 /* Copy just one button's rectangle from a source buffer to the framebuffer */
-static void BlitButtonRect(int button, UInt16 *source)
+static void BlitButtonRect(int button, tPixel *source)
 {
 	if (button < 0 || button >= (int)kNumButtons) return;
 	int rowBytes;
-	UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
-	int fbStride = rowBytes / 2;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	int fbStride = rowBytes/4;
 	const ButtonRect *r = &kButtonRects[button];
-	for (int y = r->top; y < r->bottom && y < SCREEN_HEIGHT; y++) {
-		for (int x = r->left; x < r->right && x < SCREEN_WIDTH; x++) {
-			fb[y * fbStride + x] = source[y * SCREEN_WIDTH + x];
+	int scale = Platform_GetRenderScale();
+	for (int y = r->top * scale; y < r->bottom * scale &&
+		y < Platform_GetRenderHeight(); y++) {
+		for (int x = r->left * scale; x < r->right * scale &&
+			x < Platform_GetRenderWidth(); x++) {
+			fb[y * fbStride + x] = source[y * fbStride + x];
 		}
 	}
 }
@@ -114,7 +130,1158 @@ static int KeyToButton(void)
 		return kHelpButton;
 	if (Platform_WasKeyPressed(SDL_SCANCODE_Q))
 		return kQuitButton;
+	if (Platform_WasKeyPressed(SDL_SCANCODE_M))
+		return kMultiplayerButton;
 	return kNoButton;
+}
+
+/* ---- Multiplayer licence plate in the main menu ----
+   A Hawaii plate, to go with the other states' plates: white with the
+   rainbow arch, embossed blue letters, chrome frame and screws. Drawn at
+   full render resolution; hover gives the frame a golden glow. */
+#define kPlateX 270.0f
+#define kPlateY 372.0f
+#define kPlateW 150.0f
+#define kPlateH 76.0f
+
+/* Coverage (0..1) of a rounded rectangle at a pixel, 1 pixel soft edge. */
+static float RoundedRectCoverage(float px, float py, float x0, float y0,
+	float x1, float y1, float radius, float soft)
+{
+	float cx = px < x0 + radius ? x0 + radius : (px > x1 - radius ? x1 - radius : px);
+	float cy = py < y0 + radius ? y0 + radius : (py > y1 - radius ? y1 - radius : py);
+	float dx = px - cx, dy = py - cy;
+	float distance = sqrtf(dx * dx + dy * dy) - radius;
+	float coverage = 0.5f - distance / soft;
+	return coverage < 0 ? 0 : (coverage > 1 ? 1 : coverage);
+}
+
+static tPixel MixRGB(int r0, int g0, int b0, int r1, int g1, int b1, float t)
+{
+	return PixelRGB((int)(r0 + (r1 - r0) * t), (int)(g0 + (g1 - g0) * t),
+		(int)(b0 + (b1 - b0) * t));
+}
+
+/* Grime for the plate: deterministic noise, so every menu draw looks the
+   same. */
+static float PlateHash(int x, int y)
+{
+	UInt32 h = (UInt32)x * 374761393u + (UInt32)y * 668265263u;
+	h = (h ^ (h >> 13)) * 1274126177u;
+	return (float)((h ^ (h >> 16)) & 0xFFFF) / 65535.0f;
+}
+
+static float PlateNoise(float x, float y)
+{
+	int ix = (int)floorf(x), iy = (int)floorf(y);
+	float fx = x - ix, fy = y - iy;
+	float a = PlateHash(ix, iy), b = PlateHash(ix + 1, iy);
+	float c = PlateHash(ix, iy + 1), d = PlateHash(ix + 1, iy + 1);
+	fx = fx * fx * (3 - 2 * fx);
+	fy = fy * fy * (3 - 2 * fy);
+	return a + (b - a) * fx + (c - a) * fy + (a - b - c + d) * fx * fy;
+}
+
+static tPixel ShiftPixel(tPixel p, int delta)
+{
+	int r = (int)((p >> 16) & 0xFF) + delta, g = (int)((p >> 8) & 0xFF) + delta,
+		b = (int)(p & 0xFF) + delta;
+	r = r < 0 ? 0 : (r > 255 ? 255 : r);
+	g = g < 0 ? 0 : (g > 255 ? 255 : g);
+	b = b < 0 ? 0 : (b > 255 ? 255 : b);
+	return PixelRGB(r, g, b);
+}
+
+/* Road dirt, grain, scratches and darker edges over the finished plate,
+   letters included: it has been on a car for a while. */
+static void WeatherPlate(tPixel *pixels, int stride, float x0, float y0,
+	float x1, float y1, float s)
+{
+	static const float kScratches[4][4] = {
+		{0.18f, 0.30f, 0.34f, 0.22f}, {0.58f, 0.70f, 0.80f, 0.56f},
+		{0.70f, 0.20f, 0.86f, 0.34f}, {0.10f, 0.78f, 0.24f, 0.86f}
+	};
+	int width = Platform_GetRenderWidth(), height = Platform_GetRenderHeight();
+	int px, py, i;
+	for (py = (int)y0; py < (int)y1; py++)
+		for (px = (int)x0; px < (int)x1; px++) {
+			float fx = px + 0.5f, fy = py + 0.5f;
+			float plate = RoundedRectCoverage(fx, fy, x0, y0, x1, y1, 7 * s, 1.2f);
+			float edge, dirt, amount, u, v;
+			tPixel *dst;
+			if (plate <= 0 || px < 0 || py < 0 || px >= width || py >= height)
+				continue;
+			dst = pixels + py * stride + px;
+			u = (fx - x0) / (x1 - x0);
+			v = (fy - y0) / (y1 - y0);
+			/* closeness to the border, 1 at the edge */
+			edge = fminf(fminf(fx - x0, x1 - fx), fminf(fy - y0, y1 - fy)) / (12 * s);
+			edge = edge > 1 ? 0 : 1 - edge;
+			dirt = PlateNoise(fx / (9 * s), fy / (9 * s)) * 0.65f +
+				PlateNoise(fx / (3 * s), fy / (3 * s)) * 0.35f;
+			amount = (dirt * 0.9f + edge * 0.55f + v * 0.35f - 0.78f) * 1.8f;
+			if (amount > 0) {
+				if (amount > 1)
+					amount = 1;
+				*dst = BlendAlpha(PixelRGB(98, 84, 62), *dst, (UInt32)(amount * 120 * plate));
+			}
+			/* darker towards the corners */
+			*dst = ShiftPixel(*dst, (int)(-18 * ((u - 0.5f) * (u - 0.5f) + (v - 0.5f) * (v - 0.5f)) * 2));
+			/* grain */
+			*dst = ShiftPixel(*dst, (int)((PlateHash(px, py) - 0.5f) * 16));
+		}
+	/* a few fine scratches */
+	for (i = 0; i < 4; i++) {
+		float ax = x0 + (x1 - x0) * kScratches[i][0], ay = y0 + (y1 - y0) * kScratches[i][1];
+		float bx = x0 + (x1 - x0) * kScratches[i][2], by = y0 + (y1 - y0) * kScratches[i][3];
+		int steps = (int)(fabsf(bx - ax) + fabsf(by - ay)) + 1, step;
+		for (step = 0; step <= steps; step++) {
+			float t = (float)step / steps;
+			px = (int)(ax + (bx - ax) * t);
+			py = (int)(ay + (by - ay) * t + sinf(t * 9 + i) * s);
+			if (px >= 0 && py >= 0 && px < width && py < height)
+				pixels[py * stride + px] = BlendAlpha(PixelRGB(250, 250, 245),
+					pixels[py * stride + px], i & 1 ? 70 : 45);
+		}
+	}
+}
+
+static void DrawLicensePlate(tPixel *pixels, int stride, int hover, int pressed)
+{
+	static const int kRainbow[6][3] = {
+		{196, 82, 76}, {214, 150, 84}, {216, 198, 104},
+		{110, 160, 106}, {92, 128, 186}, {130, 100, 160}
+	};
+	float s = (float)Platform_GetRenderScale();
+	float offset = pressed ? 1.0f : 0.0f;
+	float x0 = (kPlateX + offset) * s, y0 = (kPlateY + offset) * s;
+	float x1 = x0 + kPlateW * s, y1 = y0 + kPlateH * s;
+	float inset = 3.5f * s;
+	float arcX = (x0 + x1) / 2, arcY = y0 + kPlateH * 1.62f * s;
+	int width = Platform_GetRenderWidth(), height = Platform_GetRenderHeight();
+	int px, py;
+	for (py = (int)y0 - 2; py < (int)(y1 + 8 * s); py++)
+		for (px = (int)x0 - 2; px < (int)(x1 + 6 * s); px++) {
+			tPixel *dst;
+			float fx = px + 0.5f, fy = py + 0.5f;
+			float shadow, frame, face;
+			if (px < 0 || py < 0 || px >= width || py >= height)
+				continue;
+			dst = pixels + py * stride + px;
+			/* soft drop shadow */
+			shadow = RoundedRectCoverage(fx, fy, x0 + 2 * s, y0 + 3 * s,
+				x1 + 2 * s, y1 + 3 * s, 8 * s, 3 * s);
+			if (shadow > 0)
+				*dst = BlendAlpha(PixelRGB(0, 0, 0), *dst, (UInt32)(shadow * 70));
+			/* dark frame like the other plates' (golden on hover) */
+			frame = RoundedRectCoverage(fx, fy, x0, y0, x1, y1, 7 * s, 1.2f);
+			if (frame > 0) {
+				float t = (fy - y0) / (y1 - y0);
+				tPixel color = hover ?
+					MixRGB(226, 190, 96, 150, 104, 30, t) :
+					MixRGB(78, 76, 80, 34, 32, 36, t);
+				/* a faint rim on top */
+				if (fy - y0 < 1.2f * s)
+					color = BlendAlpha(PixelRGB(200, 200, 200), color, 70);
+				*dst = BlendAlpha(color, *dst, (UInt32)(frame * 255));
+			}
+			/* the plate itself */
+			face = RoundedRectCoverage(fx, fy, x0 + inset, y0 + inset,
+				x1 - inset, y1 - inset, 5 * s, 1.2f);
+			if (face > 0) {
+				float t = (fy - y0 - inset) / (y1 - y0 - 2 * inset);
+				float dx = fx - arcX, dy = fy - arcY;
+				float radius = sqrtf(dx * dx + dy * dy) / s;
+				float band = (kPlateH * 1.42f - radius) / 2.2f;	/* outer band first */
+				tPixel color = MixRGB(238, 236, 226, 214, 214, 208, t);	/* aged white */
+				if (pressed)
+					color = MixRGB(222, 220, 210, 198, 198, 192, t);
+				if (band >= 0 && band < 6) {
+					int index = (int)band;
+					float edge = band - index;
+					/* soft seams between the colours */
+					UInt32 alpha = (UInt32)(150 * (edge < 0.15f ? edge / 0.15f :
+						(edge > 0.85f ? (1 - edge) / 0.15f : 1)));
+					color = BlendAlpha(PixelRGB(kRainbow[index][0], kRainbow[index][1],
+						kRainbow[index][2]), color, alpha);
+				}
+				*dst = BlendAlpha(color, *dst, (UInt32)(face * 255));
+			}
+		}
+	/* screws in the top corners of the plate */
+	{
+		static const float kScrewX[2] = {0.24f, 0.76f};
+		int screw;
+		for (screw = 0; screw < 2; screw++) {
+			float cx = x0 + kPlateW * kScrewX[screw] * s, cy = y0 + 8.5f * s;
+			for (py = (int)(cy - 4 * s); py <= (int)(cy + 4 * s); py++)
+				for (px = (int)(cx - 4 * s); px <= (int)(cx + 4 * s); px++) {
+					float dx = px + 0.5f - cx, dy = py + 0.5f - cy;
+					float d = sqrtf(dx * dx + dy * dy) / s;
+					float coverage = 3.2f - d;
+					tPixel color;
+					if (coverage <= 0 || px < 0 || py < 0 || px >= width || py >= height)
+						continue;
+					if (coverage > 1)
+						coverage = 1;
+					color = MixRGB(235, 235, 240, 120, 120, 130, (dy / s + 3) / 6);
+					if (fabsf(dx - dy) < 0.6f * s && d < 2.4f)
+						color = PixelRGB(70, 70, 80);	/* the slot */
+					pixels[py * stride + px] = BlendAlpha(color, pixels[py * stride + px],
+						(UInt32)(coverage * 255));
+				}
+		}
+	}
+	/* lettering: state, embossed main word with its highlight, slogan */
+	{
+		float base = offset;
+		tPixel navy = hover ? PixelRGB(24, 40, 130) : PixelRGB(30, 40, 96);
+		TR_DrawStringSmooth(pixels, stride, kPlateX + base + kPlateW / 2 - 3 * 6.5f,
+			kPlateY + base + 13, "HAWAII", 6.5f, 9, PixelRGB(50, 48, 52));
+		TR_DrawStringSmooth(pixels, stride, kPlateX + base + kPlateW / 2 - 11 * 5.5f + 1,
+			kPlateY + base + 26 + 1, "MULTIPLAYER", 11, 26, PixelRGB(170, 170, 176));
+		TR_DrawStringSmooth(pixels, stride, kPlateX + base + kPlateW / 2 - 11 * 5.5f,
+			kPlateY + base + 26, "MULTIPLAYER", 11, 26, navy);
+		TR_DrawStringSmooth(pixels, stride, kPlateX + base + kPlateW / 2 - 11 * 2.75f,
+			kPlateY + base + kPlateH - 16, "LOCAL - LAN", 5.5f, 8, PixelRGB(150, 50, 52));
+	}
+	WeatherPlate(pixels, stride, x0, y0, x1, y1, s);
+}
+
+static void DrawMenuLicensePlate(int imageIndex, int hover, int pressed)
+{
+	tPixel *pixels = imageIndex == 0 ? sMenuNormal :
+		(imageIndex == 1 ? sMenuHover : sMenuPressed);
+	DrawLicensePlate(pixels, Platform_GetRenderWidth(), hover, pressed);
+}
+
+/* ---- Multiplayer menu ----
+   A big mode selector on top, the three ways to play, and buttons for the
+   crate settings and the controls. Keys: M mode, K crates, P controls. */
+static const char *const kModeNames[kGameModeCount] = {
+	"CO-OP", "DUEL", "PACKAGES", "POLICE", "ZOMBIE"
+};
+static const char *const kModeInfos[kGameModeCount] = {
+	"NO POINTS FOR HITS - SHARE YOUR LIVES",
+	"WEAPONS HIT RIVALS - 1000 PER TAKEDOWN",
+	"PACKAGES ALL OVER - SWARMS HUNT THE FINDER",
+	"COPS KEEP COMING - AND THEY RAM",
+	"EVERY CAR ON THE ROAD HUNTS YOU"
+};
+static const UInt16 kModeColors[kGameModeCount] = {
+	COL_GREEN, COL_RED, COL_YELLOW, COL_CYAN, COL_WHITE
+};
+static const UInt16 kModeShades[kGameModeCount] = {
+	0x0100, 0x2400, 0x2520, 0x00E9, 0x18C6
+};
+#define kModePanelY 92
+#define kModePanelH 58
+#define kMenuRowY 160
+#define kMenuRowStep 44
+#define kMenuButtonY 300
+#define kMenuButtonH 50
+
+static int CurrentMultiplayerMode(void)
+{
+	return gPrefs.unused[8] < kGameModeCount ? gPrefs.unused[8] : 0;
+}
+
+/* A framed button: bright border, dark face, big label and two info lines. */
+static void DrawMenuButton(tPixel *fb, int stride, int x, int y, int w, int h,
+	UInt16 border, UInt16 face, const char *label, const char *info1,
+	const char *info2, UInt16 labelColor)
+{
+	TR_FillRect(fb, stride, x + 3, y + 3, w, h, COL_BLACK);
+	TR_FillRect(fb, stride, x, y, w, h, border);
+	TR_FillRect(fb, stride, x + 2, y + 2, w - 4, h - 4, face);
+	TR_FillRect(fb, stride, x + 2, y + 2, w - 4, 2, COL_GRAY);
+	TR_DrawStringCentered(fb, stride, x + w / 2, y + 7, label, labelColor, 2);
+	if (info1)
+		TR_DrawStringCentered(fb, stride, x + w / 2, y + 27, info1, COL_WHITE, 1);
+	if (info2)
+		TR_DrawStringCentered(fb, stride, x + w / 2, y + 38, info2, labelColor, 1);
+}
+
+static void DrawMultiplayerOverlay(const char *title, const char *subtitle,
+	int selected)
+{
+	static const char *labels[] = {"", "HOST LAN GAME", "JOIN LAN GAME"};
+	static const char *kAmounts[kPackageAmountCount] = {"FEW", "NORMAL", "MORE", "MANY"};
+	int rowBytes, stride, row, mode = CurrentMultiplayerMode();
+	char info1[48], info2[48];
+	const char *gasKey = SDL_GetScancodeName(
+		(SDL_Scancode)gPrefs.localKeyCodes[0][kForward]);
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	if (!fb)
+		return;
+	stride = rowBytes/4;
+	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+	TR_FillRect(fb, stride, 96, 34, 448, 382, COL_DKGRAY);
+	TR_FillRect(fb, stride, 100, 38, 440, 374, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 48, title, COL_YELLOW, 2);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 72, subtitle, COL_WHITE, 1);
+
+	/* game mode selector */
+	TR_FillRect(fb, stride, 119, kModePanelY + 3, 406, kModePanelH, COL_BLACK);
+	TR_FillRect(fb, stride, 116, kModePanelY, 408, kModePanelH, kModeColors[mode]);
+	TR_FillRect(fb, stride, 119, kModePanelY + 3, 402, kModePanelH - 6, kModeShades[mode]);
+	TR_DrawString(fb, stride, 128, kModePanelY + 14, "<", kModeColors[mode], 3);
+	TR_DrawString(fb, stride, 488, kModePanelY + 14, ">", kModeColors[mode], 3);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2 + 2, kModePanelY + 11,
+		kModeNames[mode], COL_BLACK, 3);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, kModePanelY + 9,
+		kModeNames[mode], kModeColors[mode], 3);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, kModePanelY + 42,
+		kModeInfos[mode], COL_WHITE, 1);
+
+	/* the three ways to play */
+	for (row = 0; row < 3; ++row) {
+		int y = kMenuRowY + row * kMenuRowStep;
+		UInt16 color = row == selected ? COL_BAR_FG : COL_DKGRAY;
+		TR_FillRect(fb, stride, 154, y, 332, 38, color);
+		TR_FillRect(fb, stride, 156, y + 2, 328, 34,
+			row == selected ? 0x7FE0 : COL_BAR_BG);
+		if (row == 0) {
+			int player;
+			TR_DrawStringCentered(fb, stride, 232, y + 11, "LOCAL GAME",
+				row == selected ? COL_BLACK : COL_WHITE, 1);
+			for (player = 1; player <= kLocalPlayerCount; ++player) {
+				int x = 318 + (player - 1) * 40;
+				UInt16 numberColor = player == gPrefs.localPlayerCount ?
+					COL_YELLOW : COL_WHITE;
+				char number[2] = {(char)('0' + player), '\0'};
+				TR_FillRect(fb, stride, x, y + 4, 34, 30,
+					player == gPrefs.localPlayerCount ? COL_BAR_FG : COL_DKGRAY);
+				TR_DrawStringCentered(fb, stride, x + 17, y + 15, number, numberColor, 1);
+			}
+		} else {
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, y + 11,
+				labels[row], row == selected ? COL_BLACK : COL_WHITE, 1);
+		}
+	}
+
+	/* crate settings and controls */
+	{
+		int themes = Network_GetLocalThemeMode(), kind, enabled = 0;
+		for (kind = 0; kind < kCrateKindCount; ++kind)
+			enabled += Network_GetLocalCrateWeight(kind) != kCrateOff;
+		if (themes == kThemeRandom)
+			snprintf(info1, sizeof(info1), "RANDOM THEMES");
+		else if (themes >= kThemeFixed)
+			snprintf(info1, sizeof(info1), "THEME %s", kCrateThemes[themes - kThemeFixed].name);
+		else
+			snprintf(info1, sizeof(info1), "%d OF %d CRATES ON", enabled, kCrateKindCount);
+		snprintf(info2, sizeof(info2), "PACKAGES %s", kAmounts[Network_GetLocalPackageAmount()]);
+		DrawMenuButton(fb, stride, 116, kMenuButtonY, 200, kMenuButtonH,
+			COL_YELLOW, 0x2520, "CRATES", info1, info2, COL_YELLOW);
+	}
+	snprintf(info1, sizeof(info1), "PLAYER 1 GAS: %s", gasKey && gasKey[0] ? gasKey : "UNBOUND");
+	DrawMenuButton(fb, stride, 324, kMenuButtonY, 200, kMenuButtonH,
+		COL_CYAN, 0x00E9, "CONTROLS", info1, "KEYS FOR ALL PLAYERS", COL_CYAN);
+
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 364,
+		"M MODE  |  K CRATES  |  P CONTROLS  |  ENTER START", 0x4210, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 384,
+		"ESC  BACK", 0x4210, 1);
+	Platform_Blit2Screen();
+}
+
+/* ---- Crate settings (K in the multiplayer menu) ----
+   Row 0: package amount, row 1: themes (off, random, or one theme), row 2:
+   which theme's mix the list shows, then every crate kind with its
+   frequency in two columns. With themes off the list is your own mix;
+   otherwise it is the theme's, and changing it changes the theme. */
+#define kCrateRows ((kCrateKindCount + 1) / 2)
+#define kCrateListY 198
+#define kCrateRowH 15
+#define kCrateFirstRow 3
+
+static const char *const kWeightNames[kCrateWeightCount] = {"OFF", "RARE", "NORMAL", "OFTEN"};
+static const UInt16 kWeightColors[kCrateWeightCount] = {COL_GRAY, COL_CYAN, COL_WHITE, COL_YELLOW};
+
+typedef struct {
+	UInt8 weights[kCrateKindCount];
+	UInt8 themeWeights[kCrateThemeCount][kCrateKindCount];
+	int amount, themes, editTheme;
+} tCrateEdit;
+
+/* The list on screen: your own mix, or the theme being edited. */
+static UInt8 *CrateEditList(tCrateEdit *edit)
+{
+	if (edit->themes == kThemeOff)
+		return edit->weights;
+	return edit->themeWeights[edit->themes >= kThemeFixed ?
+		edit->themes - kThemeFixed : edit->editTheme];
+}
+
+static void DrawCrateRow(tPixel *fb, int stride, int y, int selected, const char *text)
+{
+	TR_FillRect(fb, stride, 92, y, 456, 18, selected ? COL_BAR_FG : COL_DKGRAY);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, y + 5, text,
+		selected ? COL_YELLOW : COL_WHITE, 1);
+}
+
+static void DrawCrateSettings(int selected, tCrateEdit *edit)
+{
+	static const char *kAmounts[kPackageAmountCount] = {
+		"FEW - HALF THE PACKAGES", "NORMAL - THE LEVEL'S OWN",
+		"MORE - ONE EVERY 640 PIXELS", "MANY - ONE EVERY 320 PIXELS"
+	};
+	int rowBytes, stride, kind;
+	char line[80];
+	const UInt8 *list = CrateEditList(edit);
+	int theme = edit->themes >= kThemeFixed ? edit->themes - kThemeFixed : edit->editTheme;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	if (!fb)
+		return;
+	stride = rowBytes / 4;
+	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+	TR_FillRect(fb, stride, 72, 70, 496, 348, COL_DKGRAY);
+	TR_FillRect(fb, stride, 76, 74, 488, 340, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 84, "CRATES", COL_YELLOW, 2);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 108,
+		"PACKAGES AND HOW OFTEN EACH CRATE COMES (ANY MODE)", COL_WHITE, 1);
+	snprintf(line, sizeof(line), "< PACKAGES: %s >", kAmounts[edit->amount]);
+	DrawCrateRow(fb, stride, 126, selected == 0, line);
+	if (edit->themes == kThemeRandom)
+		snprintf(line, sizeof(line), "< THEMES: RANDOM - EACH LEVEL ONE OF THEM >");
+	else if (edit->themes >= kThemeFixed)
+		snprintf(line, sizeof(line), "< THEMES: ALWAYS %s >", kCrateThemes[theme].name);
+	else
+		snprintf(line, sizeof(line), "< THEMES: OFF - YOUR OWN MIX BELOW >");
+	DrawCrateRow(fb, stride, 148, selected == 1, line);
+	if (edit->themes == kThemeOff)
+		snprintf(line, sizeof(line), "YOUR OWN MIX");
+	else
+		snprintf(line, sizeof(line), "< EDIT THEME: %s %d/%d >", kCrateThemes[theme].name,
+			theme + 1, kCrateThemeCount);
+	DrawCrateRow(fb, stride, 170, selected == 2, line);
+	for (kind = 0; kind < kCrateKindCount; ++kind) {
+		int column = kind / kCrateRows, row = kind % kCrateRows;
+		int x = 92 + column * 232, y = kCrateListY + row * kCrateRowH;
+		int weight = list[kind];
+		if (selected == kind + kCrateFirstRow)
+			TR_FillRect(fb, stride, x, y - 3, 224, kCrateRowH - 1, COL_BAR_FG);
+		TR_DrawString(fb, stride, x + 6, y, kCrateKindNames[kind],
+			weight ? COL_WHITE : COL_GRAY, 1);
+		TR_DrawStringRight(fb, stride, x + 218, y, kWeightNames[weight], kWeightColors[weight], 1);
+	}
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 368,
+		"UP/DOWN SELECT  |  LEFT/RIGHT/SPACE CHANGE", COL_CYAN, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 382,
+		edit->themes == kThemeOff ? "A: ALL NORMAL  |  N: ALL OFF  |  O: ORIGINAL ONLY" :
+			"A: ALL NORMAL  |  N: ALL OFF  |  R: RESET THEME", COL_CYAN, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 398,
+		"ESC  BACK (SAVED)", COL_GRAY, 1);
+	Platform_Blit2Screen();
+}
+
+static void ChooseCrates(void)
+{
+	tCrateEdit edit;
+	int selected = 0, kind, theme, rows = kCrateKindCount + kCrateFirstRow;
+	for (kind = 0; kind < kCrateKindCount; ++kind) {
+		edit.weights[kind] = (UInt8)Network_GetLocalCrateWeight(kind);
+		for (theme = 0; theme < kCrateThemeCount; ++theme)
+			edit.themeWeights[theme][kind] = (UInt8)Network_GetLocalThemeWeight(theme, kind);
+	}
+	edit.amount = Network_GetLocalPackageAmount();
+	edit.themes = Network_GetLocalThemeMode();
+	edit.editTheme = edit.themes >= kThemeFixed ? edit.themes - kThemeFixed : 0;
+	DrawCrateSettings(selected, &edit);
+	for (;;) {
+		int x, y, change = 0, redraw = 0;
+		UInt8 *list = CrateEditList(&edit);
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			break;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			break;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_UP)) {
+			selected = (selected + rows - 1) % rows;
+			redraw = 1;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_DOWN)) {
+			selected = (selected + 1) % rows;
+			redraw = 1;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_LEFT))
+			change = -1;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_RIGHT) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_SPACE))
+			change = 1;
+		if (Platform_GetMouseClick(&x, &y)) {
+			if (y >= 126 && y < 144)
+				selected = 0, change = 1;
+			else if (y >= 148 && y < 166)
+				selected = 1, change = 1;
+			else if (y >= 170 && y < 188)
+				selected = 2, change = x < SCREEN_WIDTH / 2 ? -1 : 1;
+			else if (y >= kCrateListY - 3 && x >= 92 && x < 548) {
+				int column = (x - 92) / 232, row = (y - kCrateListY + 3) / kCrateRowH;
+				kind = column * kCrateRows + row;
+				if (row < kCrateRows && kind < kCrateKindCount)
+					selected = kind + kCrateFirstRow, change = 1;
+			}
+			redraw = 1;
+		}
+		if (change) {
+			if (selected == 0)
+				edit.amount = (edit.amount + kPackageAmountCount + change) % kPackageAmountCount;
+			else if (selected == 1) {
+				edit.themes = (edit.themes + kThemeFixed + kCrateThemeCount + change) %
+					(kThemeFixed + kCrateThemeCount);
+				if (edit.themes >= kThemeFixed)
+					edit.editTheme = edit.themes - kThemeFixed;
+			} else if (selected == 2) {
+				/* browse the themes; with one theme always on, switch it */
+				if (edit.themes == kThemeRandom)
+					edit.editTheme = (edit.editTheme + kCrateThemeCount + change) % kCrateThemeCount;
+				else if (edit.themes >= kThemeFixed) {
+					edit.editTheme = (edit.editTheme + kCrateThemeCount + change) % kCrateThemeCount;
+					edit.themes = kThemeFixed + edit.editTheme;
+				}
+			} else {
+				kind = selected - kCrateFirstRow;
+				list[kind] = (UInt8)((list[kind] + kCrateWeightCount + change) % kCrateWeightCount);
+			}
+			redraw = 1;
+		}
+		list = CrateEditList(&edit);
+		if (Platform_WasKeyPressed(SDL_SCANCODE_A)) {
+			memset(list, kCrateNormal, kCrateKindCount);
+			redraw = 1;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_N)) {
+			memset(list, kCrateOff, kCrateKindCount);
+			redraw = 1;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_O) && edit.themes == kThemeOff) {
+			for (kind = 0; kind < kCrateKindCount; ++kind)
+				list[kind] = kind < kCrateKindGrip ? kCrateNormal : kCrateOff;
+			redraw = 1;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_R) && edit.themes != kThemeOff) {
+			theme = edit.themes >= kThemeFixed ? edit.themes - kThemeFixed : edit.editTheme;
+			memcpy(edit.themeWeights[theme], kCrateThemes[theme].weights, kCrateKindCount);
+			redraw = 1;
+		}
+		if (redraw)
+			DrawCrateSettings(selected, &edit);
+		SDL_Delay(16);
+	}
+	Network_SetLocalCrates(edit.weights, edit.amount, edit.themes,
+		(const UInt8 (*)[kCrateKindCount])edit.themeWeights);
+}
+
+/* gPrefs.unused[8]: the multiplayer game mode, see kGameModeCoop... */
+static void ToggleMultiplayerMode(int step)
+{
+	gPrefs.unused[8] = (UInt8)((CurrentMultiplayerMode() + kGameModeCount + step) %
+		kGameModeCount);
+	WritePrefs(0);
+}
+
+static int ChooseMultiplayerMode(void)
+{
+	int selected = 0;
+	DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+	for (;;) {
+		int x, y;
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			return -1;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			return -1;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_P)) {
+			ConfigureInput();
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+			continue;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_M)) {
+			ToggleMultiplayerMode(1);
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+			continue;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_K)) {
+			ChooseCrates();
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+			continue;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_UP) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_W)) {
+			selected = (selected + 2) % 3;
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_DOWN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_S)) {
+			selected = (selected + 1) % 3;
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+		}
+		if (selected == 0 && Platform_WasKeyPressed(SDL_SCANCODE_LEFT)) {
+			if (gPrefs.localPlayerCount <= 1)
+				gPrefs.localPlayerCount = kLocalPlayerCount;
+			else
+				gPrefs.localPlayerCount--;
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+		}
+		if (selected == 0 && Platform_WasKeyPressed(SDL_SCANCODE_RIGHT)) {
+			if (gPrefs.localPlayerCount >= kLocalPlayerCount)
+				gPrefs.localPlayerCount = 1;
+			else
+				gPrefs.localPlayerCount++;
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER))
+			return selected;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_1) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_L))
+			return 0;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_H))
+			return 1;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_J))
+			return 2;
+		if (Platform_GetMouseClick(&x, &y)) {
+			int row;
+			if (y >= kModePanelY && y < kModePanelY + kModePanelH && x >= 116 && x < 524) {
+				ToggleMultiplayerMode(x < 180 ? -1 : 1);
+				DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+				continue;
+			}
+			if (y >= kMenuButtonY && y < kMenuButtonY + kMenuButtonH) {
+				if (x >= 116 && x < 316)
+					ChooseCrates();
+				else if (x >= 324 && x < 524)
+					ConfigureInput();
+				DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+				continue;
+			}
+			for (row = 0; row < 3; ++row) {
+				int top = kMenuRowY + row * kMenuRowStep;
+				if (x < 154 || x >= 486 || y < top || y >= top + 38)
+					continue;
+				if (row == 0 && x >= 318) {
+					int player = 1 + (x - 318) / 40;
+					if (player >= 1 && player <= kLocalPlayerCount) {
+						gPrefs.localPlayerCount = (UInt8)player;
+						WritePrefs(0);
+						break;
+					}
+				}
+				return row;
+			}
+			if (row < 3) {
+				DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+				continue;
+			}
+			if (y >= 380 && y < 396) return -1;
+		}
+		SDL_Delay(16);
+	}
+}
+
+static void DrawPlayerCountPicker(int selected, const char *title)
+{
+	int rowBytes, stride, player;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	if (!fb)
+		return;
+	stride = rowBytes/4;
+	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+	TR_FillRect(fb, stride, 112, 104, 416, 270, COL_DKGRAY);
+	TR_FillRect(fb, stride, 116, 108, 408, 262, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 130,
+		title, COL_YELLOW, 2);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 158,
+		"CHOOSE NUMBER OF PLAYERS", COL_WHITE, 1);
+	for (player = 1; player <= kLocalPlayerCount; ++player) {
+		int x = 148 + (player - 1) * 86;
+		UInt16 color = player == selected ? 0x7FE0 : COL_DKGRAY;
+		TR_FillRect(fb, stride, x, 194, 72, 72, color);
+		TR_FillRect(fb, stride, x + 2, 196, 68, 68,
+			player == selected ? COL_BAR_FG : COL_DKGRAY);
+		TR_DrawStringCentered(fb, stride, x + 36, 211,
+			player == selected ? "PLAYER" : "", COL_WHITE, 1);
+		{
+			char number[2] = {(char)('0' + player), '\0'};
+			TR_DrawStringCentered(fb, stride, x + 36, 229,
+				number, player == selected ? COL_BLACK : COL_WHITE, 2);
+		}
+	}
+	TR_FillRect(fb, stride, 216, 286, 208, 38, COL_BAR_FG);
+	TR_FillRect(fb, stride, 218, 288, 204, 34, 0x7FE0);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 299,
+		"START LOCAL GAME", COL_BLACK, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 342,
+		"ESC  BACK", COL_GRAY, 1);
+	Platform_Blit2Screen();
+}
+
+static int ChoosePlayerCount(int minimum, const char *title)
+{
+	int selected = gPrefs.localPlayerCount;
+	if (selected < minimum || selected > kLocalPlayerCount)
+		selected = minimum;
+	DrawPlayerCountPicker(selected, title);
+	for (;;) {
+		int x, y;
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			return 0;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			return 0;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_LEFT) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_A))
+			selected = selected <= minimum ? kLocalPlayerCount : selected - 1;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_RIGHT) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_D))
+			selected = selected >= kLocalPlayerCount ? minimum : selected + 1;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER))
+			return selected;
+		if (Platform_GetMouseClick(&x, &y)) {
+			int player;
+			for (player = 1; player <= kLocalPlayerCount; ++player) {
+				int buttonX = 148 + (player - 1) * 86;
+				if (player >= minimum && x >= buttonX && x < buttonX + 72 &&
+					y >= 194 && y < 266) {
+					selected = player;
+					break;
+				}
+			}
+			if (x >= 216 && x < 424 && y >= 286 && y < 324) {
+				if (selected < minimum)
+					selected = minimum;
+				return selected;
+			}
+			if (y >= 330 && y < 358)
+				return 0;
+		}
+		DrawPlayerCountPicker(selected, title);
+		SDL_Delay(16);
+	}
+}
+
+/* Drivers in the LAN lobby with the vehicle each one picked. */
+static void DrawLobbyDrivers(tPixel *fb, int stride, int y)
+{
+	int slot;
+	for (slot = 0; slot < kNetworkMaxPlayers; ++slot) {
+		const char *name = Network_GetSlotName(slot);
+		char line[48];
+		if (!name)
+			continue;
+		snprintf(line, sizeof(line), "%d  %-15s %s", slot + 1, name,
+			Vehicle_Name(Network_GetPlayerVehicle(slot)));
+		TR_DrawString(fb, stride, 150, y, line,
+			slot == Network_GetLocalSlot() ? COL_YELLOW : COL_WHITE, 1);
+		y += 15;
+	}
+}
+
+static void DrawVehiclePicker(tPixel *fb, int stride, int y)
+{
+	char line[40];
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, y,
+		"YOUR VEHICLE  (LEFT / RIGHT)", COL_GRAY, 1);
+	snprintf(line, sizeof(line), "<  %s  >", Vehicle_Name(Network_GetLocalVehicle()));
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, y + 14, line, COL_CYAN, 2);
+}
+
+/* LEFT/RIGHT or a click on the picker row changes the lobby vehicle. */
+static void HandleVehiclePicker(int clickX, int clickY, int pickerY)
+{
+	int step = 0, index = Vehicle_IndexOf(Network_GetLocalVehicle());
+	if (Platform_WasKeyPressed(SDL_SCANCODE_LEFT))
+		step = -1;
+	if (Platform_WasKeyPressed(SDL_SCANCODE_RIGHT))
+		step = 1;
+	if (clickY >= pickerY + 10 && clickY < pickerY + 34)
+		step = clickX < SCREEN_WIDTH / 2 ? -1 : 1;
+	if (step)
+		Network_SetLocalVehicle(Vehicle_ID(index + step));
+}
+
+static void DrawLanViewChoice(tPixel *fb, int stride, int y)
+{
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, y,
+		Prefs_IsLanOwnScreen() ? "V: VIEW  OWN SCREEN" : "V: VIEW  SPLIT SCREEN",
+		COL_CYAN, 1);
+}
+
+static void DrawLanLobby(int targetPlayers, int connectedPlayers)
+{
+	int rowBytes, stride;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	if (!fb)
+		return;
+	stride = rowBytes/4;
+	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+	TR_FillRect(fb, stride, 112, 88, 416, 308, COL_DKGRAY);
+	TR_FillRect(fb, stride, 116, 92, 408, 300, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 114,
+		"LAN GAME LOBBY", COL_YELLOW, 2);
+	{
+		char status[48];
+		snprintf(status, sizeof(status), "CONNECTED: %d / %d",
+			connectedPlayers, targetPlayers);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 140,
+			status, connectedPlayers >= targetPlayers ? COL_GREEN : COL_YELLOW, 1);
+	}
+	DrawLobbyDrivers(fb, stride, 158);
+	DrawVehiclePicker(fb, stride, 226);
+	{
+		char address[16], line[56];
+		if (Network_GetLocalAddress(address, sizeof(address)))
+			snprintf(line, sizeof(line), "OTHERS: JOIN LAN GAME (OR IP %s)", address);
+		else
+			snprintf(line, sizeof(line), "OTHERS: CHOOSE JOIN LAN GAME");
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 278, line, COL_GRAY, 1);
+	}
+	DrawLanViewChoice(fb, stride, 291);
+	if (connectedPlayers >= targetPlayers) {
+		TR_FillRect(fb, stride, 216, 304, 208, 40, COL_BAR_FG);
+		TR_FillRect(fb, stride, 218, 306, 204, 36, 0x7FE0);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 318,
+			"START RACE", COL_BLACK, 1);
+	} else {
+		TR_FillRect(fb, stride, 216, 304, 208, 40, COL_DKGRAY);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 318,
+			"WAITING FOR PLAYERS", COL_GRAY, 1);
+	}
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 360,
+		"ESC  CANCEL", COL_GRAY, 1);
+	Platform_Blit2Screen();
+}
+
+static int WaitForLanPlayers(int targetPlayers)
+{
+	for (;;) {
+		int x, y, connected;
+		Platform_PollEvents();
+		Network_Poll();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			return 0;
+		}
+		connected = Network_GetPlayerCount();
+		Network_Publish();	/* clients see the drivers and vehicles */
+		DrawLanLobby(targetPlayers, connected);
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			return 0;
+		HandleVehiclePicker(-1, -1, 226);
+		if (Platform_WasKeyPressed(SDL_SCANCODE_V))
+			Prefs_ToggleLanScreen();
+		if ((Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER)) &&
+			connected >= targetPlayers)
+			return 1;
+		if (Platform_GetMouseClick(&x, &y)) {
+			HandleVehiclePicker(x, y, 226);
+			if (y >= 304 && y < 344 && x >= 216 && x < 424 &&
+				connected >= targetPlayers)
+				return 1;
+			if (y >= 350 && y < 374)
+				return 0;
+		}
+		SDL_Delay(16);
+	}
+}
+
+static void DrawHostList(const tLanHost *hosts, int count, int frame)
+{
+	int rowBytes, stride, i;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	if (!fb)
+		return;
+	stride = rowBytes/4;
+	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+	TR_FillRect(fb, stride, 112, 88, 416, 308, COL_DKGRAY);
+	TR_FillRect(fb, stride, 116, 92, 408, 300, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 110,
+		"JOIN LAN GAME", COL_YELLOW, 2);
+	if (!count) {
+		static const char *dots[] = {"", ".", "..", "..."};
+		char line[48];
+		snprintf(line, sizeof(line), "SEARCHING THE NETWORK%s", dots[(frame / 20) % 4]);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 190, line, COL_WHITE, 1);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 214,
+			"THE HOST MUST BE IN THE LAN LOBBY", COL_GRAY, 1);
+	}
+	for (i = 0; i < count; ++i) {
+		int y = 140 + i * 40;
+		char label[48], players[24];
+		int open = !hosts[i].started && hosts[i].players < hosts[i].limit;
+		TR_FillRect(fb, stride, 140, y, 360, 34, open ? COL_BAR_FG : COL_DKGRAY);
+		snprintf(label, sizeof(label), "%d  %s", i + 1,
+			hosts[i].name[0] ? hosts[i].name : hosts[i].address);
+		TR_DrawString(fb, stride, 150, y + 6, label, open ? COL_WHITE : COL_GRAY, 1);
+		TR_DrawString(fb, stride, 150, y + 20, hosts[i].address, COL_GRAY, 1);
+		if (hosts[i].started)
+			snprintf(players, sizeof(players), "RACE RUNNING");
+		else
+			snprintf(players, sizeof(players), "%d/%d DRIVERS",
+				hosts[i].players, hosts[i].limit);
+		TR_DrawStringRight(fb, stride, 490, y + 13, players,
+			open ? COL_YELLOW : COL_GRAY, 1);
+	}
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 352,
+		"CLICK OR 1-5: JOIN   M: ENTER IP", COL_CYAN, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 370,
+		"ESC  BACK", COL_GRAY, 1);
+	Platform_Blit2Screen();
+}
+
+/* Lists hosts found on the LAN. Returns 1 with the chosen address, 2 for
+   manual address entry, 0 to go back. */
+static int ChooseLanHost(char *address, size_t capacity)
+{
+	tLanHost hosts[5];
+	int count = 0, frame = 0, choice = -1;
+	if (!Network_StartDiscovery(kMultiplayerPort))
+		return 2;
+	while (choice < 0) {
+		int x, y, i;
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			choice = 0;
+			break;
+		}
+		count = Network_PollDiscovery(hosts, 5);
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			choice = 0;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_M))
+			choice = 2;
+		for (i = 0; i < count && choice < 0; ++i)
+			if (Platform_WasKeyPressed((SDL_Scancode)(SDL_SCANCODE_1 + i)) &&
+				!hosts[i].started) {
+				snprintf(address, capacity, "%s", hosts[i].address);
+				choice = 1;
+			}
+		if (choice < 0 && Platform_GetMouseClick(&x, &y)) {
+			for (i = 0; i < count; ++i)
+				if (x >= 140 && x < 500 && y >= 140 + i * 40 &&
+					y < 174 + i * 40 && !hosts[i].started) {
+					snprintf(address, capacity, "%s", hosts[i].address);
+					choice = 1;
+				}
+			if (y >= 345 && y < 362)
+				choice = 2;
+			if (y >= 364 && y < 380)
+				choice = 0;
+		}
+		if (!(frame++ % 5))
+			DrawHostList(hosts, count, frame);
+		SDL_Delay(16);
+	}
+	Network_StopDiscovery();
+	return choice;
+}
+
+static void DrawClientLobby(const char *address, UInt64 waitedMS)
+{
+	int rowBytes, stride;
+	char line[64];
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	if (!fb)
+		return;
+	stride = rowBytes/4;
+	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+	TR_FillRect(fb, stride, 112, 88, 416, 308, COL_DKGRAY);
+	TR_FillRect(fb, stride, 116, 92, 408, 300, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 114,
+		"JOIN LAN GAME", COL_YELLOW, 2);
+	snprintf(line, sizeof(line), "HOST: %s", address);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 150, line, COL_WHITE, 1);
+	if (Network_GetLocalSlot() > 0) {
+		snprintf(line, sizeof(line), "CONNECTED AS DRIVER %d", Network_GetLocalSlot() + 1);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 166, line, COL_GREEN, 1);
+		DrawLobbyDrivers(fb, stride, 186);
+		DrawVehiclePicker(fb, stride, 256);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 310,
+			"WAITING FOR THE HOST TO START THE RACE", COL_YELLOW, 1);
+		DrawLanViewChoice(fb, stride, 330);
+	} else {
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 194,
+			"CONNECTING...", COL_YELLOW, 2);
+		if (waitedMS > 5000) {
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 236,
+				"NO ANSWER FROM THE HOST.", COL_RED, 1);
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 254,
+				"IS IT IN THE LAN LOBBY? DOES ITS FIREWALL", COL_WHITE, 1);
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 270,
+				"ALLOW INCOMING CONNECTIONS FOR THE GAME?", COL_WHITE, 1);
+		}
+	}
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 360,
+		"ESC  CANCEL", COL_GRAY, 1);
+	Platform_Blit2Screen();
+}
+
+/* Waits after joining until the host starts the race (Network_Poll then
+   starts the game). Returns 0 if the player cancelled. */
+static int WaitInClientLobby(const char *address)
+{
+	UInt64 start = SDL_GetTicks64();
+	int frame = 0;
+	while (!gGameOn) {
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			return 0;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			return 0;
+		{
+			int x = -1, y = -1;
+			int clicked = Platform_GetMouseClick(&x, &y);
+			if (clicked && y >= 352 && y < 372)
+				return 0;
+			HandleVehiclePicker(x, y, 256);
+			if (Platform_WasKeyPressed(SDL_SCANCODE_V))
+				Prefs_ToggleLanScreen();
+		}
+		Network_Poll();
+		if (gGameOn || gExit)
+			break;
+		if (!(frame++ % 5))
+			DrawClientLobby(address, SDL_GetTicks64() - start);
+		SDL_Delay(16);
+	}
+	return 1;
+}
+
+static void DrawAddressPrompt(const char *address)
+{
+	int rowBytes;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	int stride;
+	if (!fb)
+		return;
+	stride = rowBytes/4;
+	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+	TR_FillRect(fb, stride, 112, 150, 416, 176, COL_DKGRAY);
+	TR_FillRect(fb, stride, 116, 154, 408, 168, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 175,
+		"JOIN LAN GAME", COL_YELLOW, 2);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 213,
+		"ENTER HOST IPv4 ADDRESS", COL_WHITE, 1);
+	TR_FillRect(fb, stride, 188, 238, 264, 30, COL_WHITE);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 249,
+		address[0] ? address : "e.g. 192.168.1.10", COL_BLACK, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 290,
+		"ENTER  CONNECT     ESC  BACK", COL_GRAY, 1);
+	Platform_Blit2Screen();
+}
+
+static int EnterServerAddress(char *address, size_t capacity)
+{
+	static const SDL_Scancode digitKeys[] = {
+		SDL_SCANCODE_0, SDL_SCANCODE_1, SDL_SCANCODE_2,
+		SDL_SCANCODE_3, SDL_SCANCODE_4, SDL_SCANCODE_5,
+		SDL_SCANCODE_6, SDL_SCANCODE_7, SDL_SCANCODE_8,
+		SDL_SCANCODE_9
+	};
+	size_t length = 0;
+	address[0] = '\0';
+	DrawAddressPrompt(address);
+	for (;;) {
+		int digit;
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			return 0;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			return 0;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER))
+			return length != 0;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_BACKSPACE) && length) {
+			address[--length] = '\0';
+			DrawAddressPrompt(address);
+		}
+		for (digit = 0; digit < 10; ++digit) {
+			if (Platform_WasKeyPressed(digitKeys[digit]) &&
+				length + 1 < capacity) {
+				address[length++] = (char)('0' + digit);
+				address[length] = '\0';
+				DrawAddressPrompt(address);
+			}
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_PERIOD) &&
+			length + 1 < capacity) {
+			address[length++] = '.';
+			address[length] = '\0';
+			DrawAddressPrompt(address);
+		}
+		SDL_Delay(16);
+	}
+}
+
+static void StartMultiplayer(int shiftHeld)
+{
+	int mode = ChooseMultiplayerMode();
+	if (mode < 0) {
+		RestoreMenuScreen();
+		return;
+	}
+	if (mode == 0) {
+		int playerCount = gPrefs.localPlayerCount;
+		WritePrefs(0);
+		if (playerCount > 1)
+			Network_EnableLocalPlayers(playerCount);
+		Network_SetSoloModes(1);	/* until EndGame */
+		StartGame(shiftHeld);
+		return;
+	}
+	if (mode == 1) {
+		int targetPlayers = ChoosePlayerCount(2, "LAN PLAYER COUNT");
+		if (!targetPlayers) {
+			RestoreMenuScreen();
+			return;
+		}
+		if (!Network_InitHost(kMultiplayerPort)) {
+			RestoreMenuScreen();
+			return;
+		}
+		Network_SetLobbyPlayerLimit(targetPlayers);
+		if (WaitForLanPlayers(targetPlayers))
+			StartGame(shiftHeld);
+		else {
+			Network_Shutdown();
+			RestoreMenuScreen();
+		}
+		return;
+	}
+	{
+		char address[16];
+		int choice = ChooseLanHost(address, sizeof(address));
+		if (choice == 2)
+			choice = EnterServerAddress(address, sizeof(address));
+		if (!choice || gExit) {
+			RestoreMenuScreen();
+			return;
+		}
+		if (!Network_InitClient(address, kMultiplayerPort)) {
+			RestoreMenuScreen();
+			return;
+		}
+		if (!WaitInClientLobby(address)) {
+			Network_Shutdown();
+			RestoreMenuScreen();
+		}
+	}
 }
 
 /* ======================================================================== */
@@ -193,7 +1360,7 @@ static void UnpackBitsRow8(const UInt8 *src, int srcLen, UInt8 *dst, int dstLen)
 static int RenderPICTToFramebuffer(const UInt8 *data, long dataSize)
 {
 	int rowBytes;
-	UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
 	if (!fb) return 0;
 
 	/* Scan for DirectBitsRect (0x009A) or PackBitsRect (0x0098) */
@@ -240,7 +1407,7 @@ static int RenderPICTToFramebuffer(const UInt8 *data, long dataSize)
 	pos += 36;
 
 	/* For 8-bit indexed color: parse the embedded color table (CLUT) */
-	UInt16 clut[256];
+	tPixel clut[256];
 	memset(clut, 0, sizeof(clut));
 
 	if (pixelSize <= 8 && isPixMap) {
@@ -259,11 +1426,8 @@ static int RenderPICTToFramebuffer(const UInt8 *data, long dataSize)
 			UInt16 r   = RdBE16(data + pos); pos += 2;
 			UInt16 g   = RdBE16(data + pos); pos += 2;
 			UInt16 b   = RdBE16(data + pos); pos += 2;
-			/* Convert 16-bit Mac color to 5-bit and pack as ARGB1555 */
-			int r5 = (r >> 11) & 0x1F;
-			int g5 = (g >> 11) & 0x1F;
-			int b5 = (b >> 11) & 0x1F;
-			UInt16 pixel = (UInt16)(0x8000 | (r5 << 10) | (g5 << 5) | b5);
+			/* 16-bit Mac color channels, kept at 8 bits */
+			tPixel pixel = PixelRGB(r >> 8, g >> 8, b >> 8);
 			if (idx < 256)
 				clut[idx] = pixel;
 			else
@@ -279,7 +1443,7 @@ static int RenderPICTToFramebuffer(const UInt8 *data, long dataSize)
 		return 0;
 
 	UInt8 rowBuf[SCREEN_WIDTH * 2]; /* max decompressed row */
-	int fbRowPixels = rowBytes / 2;
+	int fbRowPixels = rowBytes/4;
 
 	/* pmRowBytes is an independent field (up to 0x3FFF); it bounds the
 	 * memset and the UnpackBits writes into rowBuf, so reject any row that
@@ -304,22 +1468,29 @@ static int RenderPICTToFramebuffer(const UInt8 *data, long dataSize)
 
 		memset(rowBuf, 0, pmRowBytes);
 
-		UInt16 *fbRow = fb + y * fbRowPixels;
 		int pixelsThisRow = picWidth;
 		if (pixelsThisRow > SCREEN_WIDTH) pixelsThisRow = SCREEN_WIDTH;
+		int renderScale = Platform_GetRenderScale();
 
 		if (pixelSize == 16) {
 			/* 16-bit: word-level PackBits, then byte-swap each pixel */
 			UnpackBitsRow16(data + pos, packedLen, rowBuf, pmRowBytes);
 			for (int x = 0; x < pixelsThisRow; x++) {
-				UInt16 pixel = (UInt16)((rowBuf[x*2] << 8) | rowBuf[x*2+1]);
-				fbRow[x] = pixel;
+				tPixel pixel = Pixel555((UInt16)((rowBuf[x*2] << 8) | rowBuf[x*2+1]));
+				for (int sy = 0; sy < renderScale; sy++)
+					for (int sx = 0; sx < renderScale; sx++)
+						fb[(y * renderScale + sy) * fbRowPixels +
+							x * renderScale + sx] = pixel;
 			}
 		} else {
 			/* 8-bit: byte-level PackBits, then look up each index in CLUT */
 			UnpackBitsRow8(data + pos, packedLen, rowBuf, pmRowBytes);
 			for (int x = 0; x < pixelsThisRow; x++) {
-				fbRow[x] = clut[rowBuf[x]];
+				tPixel pixel = clut[rowBuf[x]];
+				for (int sy = 0; sy < renderScale; sy++)
+					for (int sx = 0; sx < renderScale; sx++)
+						fb[(y * renderScale + sy) * fbRowPixels +
+							x * renderScale + sx] = pixel;
 			}
 		}
 
@@ -336,22 +1507,53 @@ static int RenderPICTToFramebuffer(const UInt8 *data, long dataSize)
 void ShowPicScreen(int id)
 {
 	Handle pic;
+	const tHQImage *hq;
 	Platform_ScreenClear();
 
-	pic=Resources_Get(MakeFourCC("PPic"),id);
-	if(pic)
+	hq=HQAssets_Load("pics",id,0);
+	if(hq&&Platform_GetRenderScale()<=hq->scale&&
+		hq->scale%Platform_GetRenderScale()==0)
 	{
-		long compressedSize=Resources_GetSize(pic);
-		LZRWDecodeHandle(&pic,compressedSize);
+		int renderScale=Platform_GetRenderScale();
+		int sourceStep=hq->scale/renderScale;
+		int rowBytes;
+		tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+		int width=hq->width*renderScale;
+		int height=hq->height*renderScale;
+		int fbStride=rowBytes/4;
+		for(int y=0;y<height&&y<Platform_GetRenderHeight();y++)
+		{
+			tPixel *dst=fb+y*fbStride;
+			int sourceY=y*sourceStep;
+			for(int x=0;x<width&&x<Platform_GetRenderWidth();x++)
+			{
+				int sourceX=x*sourceStep;
+				const UInt8 *src=hq->rgba+
+					((size_t)sourceY*(hq->width*hq->scale)+sourceX)*4;
+				if(src[3]>=128)
+					dst[x]=PixelRGB(src[0],src[1],src[2]);
+			}
+		}
+	}
+	else
+	{
+		pic=Resources_Get(MakeFourCC("PPic"),id);
+		if(pic)
+		{
+			long compressedSize=Resources_GetSize(pic);
+			LZRWDecodeHandle(&pic,compressedSize);
 
-		long decompSize = Resources_GetSize(pic);
-		if(decompSize > 0)
-			RenderPICTToFramebuffer((const UInt8*)*pic, decompSize);
+			long decompSize = Resources_GetSize(pic);
+			if(decompSize > 0)
+				RenderPICTToFramebuffer((const UInt8*)*pic, decompSize);
 
-		Resources_Release(pic);
+			Resources_Release(pic);
+		}
 	}
 
 	Platform_Blit2Screen();
+	if(hq)
+		HQAssets_Release("pics",id,0);
 }
 
 void ShowPicScreenNoFade(int id)
@@ -387,14 +1589,18 @@ void InitInterface(void)
 		LoadPPicToBuffer(1000, sMenuNormal);
 		LoadPPicToBuffer(1001, sMenuHover);
 		LoadPPicToBuffer(1002, sMenuPressed);
+		DrawMenuLicensePlate(0, 0, 0);
+		DrawMenuLicensePlate(1, 1, 0);
+		DrawMenuLicensePlate(2, 1, 1);
 		sMenuImagesLoaded = 1;
 	}
 	InputMode(kInputSuspended);
 	/* Restore normal menu from buffer */
 	if (sMenuImagesLoaded) {
 		int rowBytes;
-		UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
-		memcpy(fb, sMenuNormal, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(UInt16));
+		tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+		memcpy(fb, sMenuNormal, (size_t)(rowBytes/4) *
+			Platform_GetRenderHeight() * sizeof(tPixel));
 		Platform_Blit2Screen();
 	} else {
 		ShowPicScreen(1000);
@@ -443,8 +1649,9 @@ static void RestoreMenuScreen(void)
 {
 	if (sMenuImagesLoaded) {
 		int rowBytes;
-		UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
-		memcpy(fb, sMenuNormal, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(UInt16));
+		tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+		memcpy(fb, sMenuNormal, (size_t)(rowBytes/4) *
+			Platform_GetRenderHeight() * sizeof(tPixel));
 		Platform_Blit2Screen();
 	} else {
 		ShowPicScreen(1000);
@@ -470,6 +1677,9 @@ static void HandleCommand(int cmd, int shiftHeld)
 			break;
 		case kStartGameButton:
 			StartGame(shiftHeld);
+			break;
+		case kMultiplayerButton:
+			StartMultiplayer(shiftHeld);
 			break;
 		case kPrefsButton:
 			Preferences();
@@ -561,6 +1771,11 @@ void Eventloop(void)
 
 	/* --- Keyboard shortcuts with visual feedback --- */
 	{
+		if (Platform_WasKeyPressed(SDL_SCANCODE_2) && !Network_IsActive()) {
+			Network_EnableLocalTwoPlayer();
+			ActivateButton(kStartGameButton);
+			return;
+		}
 		int button = KeyToButton();
 		if (button != kNoButton) {
 			ActivateButton(button);

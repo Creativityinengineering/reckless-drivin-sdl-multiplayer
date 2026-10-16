@@ -25,12 +25,12 @@ cmake -S . -B build
 cmake --build build -j "$(sysctl -n hw.logicalcpu)"
 pushd build
 
-mkdir -p RecklessDrivin.app/Contents/Frameworks
-cp -a SDL2.framework RecklessDrivin.app/Contents/Frameworks/
 find RecklessDrivin.app -type d -name Headers -exec rm -rf {} +
 find RecklessDrivin.app -type l -name Headers -exec rm -rf {} +
 
 sw_version="$(sed -n 's/^project(RecklessDrivin VERSION \([0-9.]*\).*/\1/p' ../CMakeLists.txt)"
 
-mv RecklessDrivin.app "Reckless Drivin'.app"
+ditto RecklessDrivin.app "Reckless Drivin'.app"
+codesign --force --deep --sign - --timestamp=none RecklessDrivin.app
+codesign --force --deep --sign - --timestamp=none "Reckless Drivin'.app"
 hdiutil create -fs HFS+ -srcfolder "Reckless Drivin'.app" -volname "Reckless Drivin' $sw_version" "Reckless-Drivin-$sw_version-mac.dmg"

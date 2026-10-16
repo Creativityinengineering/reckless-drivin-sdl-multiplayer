@@ -18,6 +18,7 @@
  */
 
 #include "platform.h"
+#include "jobs.h"
 #include "preferences.h"
 #include <stdio.h>
 #include <string.h>
@@ -30,15 +31,29 @@
 static SDL_Window   *sWindow   = NULL;
 static SDL_Renderer *sRenderer = NULL;
 static SDL_Texture  *sTexture  = NULL;
+static SDL_Texture  *sAIDetailTextures[300];
+static int sMultiViewCount;
+static int sMultiViewIndex;
+static int sWindowViewCount = 1;
+static int sUpscaleMode;
+static int sRenderScale = 1;
+static int sRenderWidth = SCREEN_WIDTH;
+static int sRenderHeight = SCREEN_HEIGHT;
+typedef struct {
+    int spriteIndex;
+    float centerX, centerY, direction, zoom;
+} tAIDetailDraw;
+static tAIDetailDraw sAIDetailDraws[4096];
+static int sAIDetailDrawCount;
+static int sAIDetailQueueWarning;
 
 /*
- * The game writes 16-bit pixels (ARGB1555) directly into this buffer.
+ * The game writes 32-bit pixels (see pixel.h) directly into this buffer.
  * Platform_Blit2Screen() uploads it to the GPU texture each frame.
  */
-/* Extra rows of padding beyond SCREEN_HEIGHT to absorb out-of-bounds writes
- * from the game's RLE sprite renderer (e.g. HUD panel at bottom of screen).
- * Only the first SCREEN_HEIGHT rows are uploaded to the GPU texture. */
-static UInt16 sFramebuffer[SCREEN_WIDTH * (SCREEN_HEIGHT + FRAMEBUFFER_GUARD_ROWS)];
+static tPixel sFramebuffer[
+    SCREEN_WIDTH * PLATFORM_MAX_RENDER_SCALE *
+    (SCREEN_HEIGHT + FRAMEBUFFER_GUARD_ROWS) * PLATFORM_MAX_RENDER_SCALE];
 
 void Platform_InitScreen(void)
 {
@@ -51,10 +66,20 @@ void Platform_InitScreen(void)
     {
         int winW = gPrefs.unused[0] | (gPrefs.unused[1] << 8);
         int winH = gPrefs.unused[2] | (gPrefs.unused[3] << 8);
+        int scale;
+        sUpscaleMode = gPrefs.unused[7] ? kPlatformOutput4K :
+            (gPrefs.unused[5] ? kPlatformOutput2X : kPlatformOutputOriginal);
+        sRenderScale = sUpscaleMode == kPlatformOutput4K ?
+            PLATFORM_HQ_RENDER_SCALE : 1;
+        sRenderWidth = SCREEN_WIDTH * sRenderScale;
+        sRenderHeight = SCREEN_HEIGHT * sRenderScale;
+        scale = sUpscaleMode == kPlatformOutput2X ? 2 : 1;
         if (!winW) winW = SCREEN_WIDTH;
         if (!winH) winH = SCREEN_HEIGHT;
+        winW *= scale;
+        winH *= scale;
         Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
-        if (gPrefs.unused[4])
+        if (gPrefs.unused[4] || sUpscaleMode == kPlatformOutput4K)
             flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
         sWindow = SDL_CreateWindow(
             "Reckless Drivin'",
@@ -80,25 +105,24 @@ void Platform_InitScreen(void)
         return;
     }
 
-    /* Use nearest-neighbor scaling for crisp pixel art. */
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "0");
+    /* Use crisp pixels by default; the optional upscale mode smooths them. */
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, sUpscaleMode ? "1" : "0");
 
-    /*
-     * ARGB1555 matches the original game's 16-bit pixel format.
-     * The high bit is an alpha/unused bit; the remaining 15 bits encode
-     * 5-5-5 RGB (same layout as Mac OS 16-bit color).
-     */
+    /* Matches the 32-bit framebuffer, so frames upload with a plain copy. */
+    Pixel_Init();
     sTexture = SDL_CreateTexture(
         sRenderer,
-        SDL_PIXELFORMAT_ARGB1555,
+        SDL_PIXELFORMAT_ARGB8888,
         SDL_TEXTUREACCESS_STREAMING,
-        SCREEN_WIDTH, SCREEN_HEIGHT
+        sRenderWidth, sRenderHeight
     );
     if (!sTexture) {
         fprintf(stderr, "[platform] SDL_CreateTexture failed: %s\n",
                 SDL_GetError());
         return;
     }
+    SDL_SetTextureScaleMode(sTexture, sUpscaleMode ?
+        SDL_ScaleModeLinear : SDL_ScaleModeNearest);
 
     /* Enforce minimum window size (half resolution). */
     SDL_SetWindowMinimumSize(sWindow, SCREEN_WIDTH / 2, SCREEN_HEIGHT / 2);
@@ -106,8 +130,25 @@ void Platform_InitScreen(void)
     memset(sFramebuffer, 0, sizeof(sFramebuffer));
 }
 
+int Platform_GetRenderScale(void)
+{
+    return sRenderScale;
+}
+
+int Platform_GetRenderWidth(void)
+{
+    return sRenderWidth;
+}
+
+int Platform_GetRenderHeight(void)
+{
+    return sRenderHeight;
+}
+
 void Platform_ShutdownScreen(void)
 {
+    Jobs_Shutdown();
+    Platform_ClearAIDetailSprites();
     if (sTexture)  { SDL_DestroyTexture(sTexture);   sTexture  = NULL; }
     if (sRenderer) { SDL_DestroyRenderer(sRenderer);  sRenderer = NULL; }
     if (sWindow)   { SDL_DestroyWindow(sWindow);      sWindow   = NULL; }
@@ -141,6 +182,36 @@ static UInt8 sFadeBrightness = 255;
 
 /* Forward declaration — defined in input subsystem section below */
 static int sQuitRequested;
+static void RenderAIDetailSprites(const SDL_Rect *viewport);
+
+/* Time spent inside SDL_RenderPresent (mostly vsync wait), for frame stats. */
+static UInt64 sPresentMicros;
+
+static void PresentFrame(void)
+{
+    UInt64 start = Platform_GetMicroseconds();
+    SDL_RenderPresent(sRenderer);
+    sPresentMicros += Platform_GetMicroseconds() - start;
+}
+
+UInt64 Platform_TakePresentMicroseconds(void)
+{
+    UInt64 micros = sPresentMicros;
+    sPresentMicros = 0;
+    return micros;
+}
+
+/* RGB555 -> framebuffer pixel, 5-bit channels widened to the full 0..255 range. */
+tPixel gPixel555[32768];
+
+void Pixel_Init(void)
+{
+    int color;
+    for (color = 0; color < 32768; color++) {
+        UInt32 r = (color >> 10) & 31, g = (color >> 5) & 31, b = color & 31;
+        gPixel555[color] = PixelRGB(r << 3 | r >> 2, g << 3 | g >> 2, b << 3 | b >> 2);
+    }
+}
 
 void Platform_Blit2Screen(void)
 {
@@ -150,20 +221,15 @@ void Platform_Blit2Screen(void)
     if (!sTexture || !sRenderer)
         return;
 
-    /*
-     * Lock the streaming texture, memcpy the framebuffer in, then unlock.
-     * This is the fastest path for software-rendered content on modern GPUs.
-     */
     if (SDL_LockTexture(sTexture, NULL, &texPixels, &texPitch) == 0) {
-        const int srcPitch = SCREEN_WIDTH * sizeof(UInt16);
+        const int srcPitch = sRenderWidth * (int)sizeof(tPixel);
         if (texPitch == srcPitch) {
-            /* Common fast path: pitches match exactly. */
-            memcpy(texPixels, sFramebuffer, SCREEN_HEIGHT * srcPitch);
+            memcpy(texPixels, sFramebuffer, (size_t)sRenderHeight * srcPitch);
         } else {
-            /* Row-by-row copy when the texture pitch differs. */
             const UInt8 *src = (const UInt8 *)sFramebuffer;
             UInt8 *dst = (UInt8 *)texPixels;
-            for (int y = 0; y < SCREEN_HEIGHT; y++) {
+            int y;
+            for (y = 0; y < sRenderHeight; y++) {
                 memcpy(dst, src, srcPitch);
                 src += srcPitch;
                 dst += texPitch;
@@ -173,7 +239,230 @@ void Platform_Blit2Screen(void)
     }
 
     SDL_SetTextureColorMod(sTexture, sFadeBrightness, sFadeBrightness, sFadeBrightness);
-    Platform_ScaleToFitWindow();
+    if (sMultiViewCount > 1) {
+        SDL_Rect dst;
+        int columns = 2;
+        int rows = sMultiViewCount > 2 ? 2 : 1;
+        int column = sMultiViewIndex % columns;
+        int row = sMultiViewIndex / columns;
+        int cellW, cellH, outW, outH;
+        float scale;
+        SDL_GetRendererOutputSize(sRenderer, &outW, &outH);
+        cellW = outW / columns;
+        cellH = outH / rows;
+        scale = (float)cellW / SCREEN_WIDTH;
+        if ((float)cellH / SCREEN_HEIGHT < scale)
+            scale = (float)cellH / SCREEN_HEIGHT;
+        dst.w = (int)(SCREEN_WIDTH * scale);
+        dst.h = (int)(SCREEN_HEIGHT * scale);
+        dst.x = column * cellW + (cellW - dst.w) / 2;
+        dst.y = row * cellH + (cellH - dst.h) / 2;
+        if (SDL_RenderCopy(sRenderer, sTexture, NULL, &dst) < 0)
+            fprintf(stderr, "[platform] SDL_RenderCopy failed: %s\n", SDL_GetError());
+        RenderAIDetailSprites(&dst);
+        sMultiViewIndex++;
+        if (sMultiViewIndex >= sMultiViewCount) {
+            PresentFrame();
+            sMultiViewCount = 0;
+            sMultiViewIndex = 0;
+        }
+    } else {
+        Platform_ScaleToFitWindow();
+    }
+}
+
+void Platform_BeginMultiView(int viewCount)
+{
+    int columns, rows;
+    if (!sRenderer)
+        return;
+    if (viewCount < 1)
+        viewCount = 1;
+    sMultiViewCount = viewCount > 4 ? 4 : viewCount;
+    sMultiViewIndex = 0;
+    sAIDetailDrawCount = 0;
+    sAIDetailQueueWarning = 0;
+    if (sWindowViewCount != sMultiViewCount) {
+        columns = sMultiViewCount > 1 ? 2 : 1;
+        rows = sMultiViewCount > 2 ? 2 : 1;
+        if (sUpscaleMode != kPlatformOutput4K)
+            SDL_SetWindowSize(sWindow, columns * SCREEN_WIDTH *
+                (sUpscaleMode == kPlatformOutput2X ? 2 : 1),
+                rows * SCREEN_HEIGHT *
+                (sUpscaleMode == kPlatformOutput2X ? 2 : 1));
+        sWindowViewCount = sMultiViewCount;
+    }
+    if (sMultiViewCount < 2) {
+        sMultiViewCount = 0;
+        return;
+    }
+    SDL_SetRenderDrawColor(sRenderer, 0, 0, 0, 255);
+    SDL_RenderClear(sRenderer);
+}
+
+void Platform_SetUpscaleMode(int outputMode)
+{
+    int previousMode = sUpscaleMode;
+    int requestedRenderScale;
+    int scale;
+    int columns, rows;
+    sUpscaleMode = outputMode < kPlatformOutputOriginal ||
+        outputMode > kPlatformOutput4K ? kPlatformOutputOriginal : outputMode;
+    requestedRenderScale = sUpscaleMode == kPlatformOutput4K ?
+        PLATFORM_HQ_RENDER_SCALE : 1;
+    if (requestedRenderScale != sRenderScale)
+        fprintf(stderr, "[platform] Internal render resolution changes after restart\n");
+    scale = sUpscaleMode == kPlatformOutput2X ? 2 : 1;
+    if (sTexture)
+        SDL_SetTextureScaleMode(sTexture, sUpscaleMode ?
+            SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+    if (!sWindow || !sRenderer)
+        return;
+    if (sUpscaleMode == kPlatformOutput4K) {
+        int width, height;
+        SDL_GetWindowSize(sWindow, &width, &height);
+        gPrefs.unused[0] = (UInt8)(width & 0xff);
+        gPrefs.unused[1] = (UInt8)((width >> 8) & 0xff);
+        gPrefs.unused[2] = (UInt8)(height & 0xff);
+        gPrefs.unused[3] = (UInt8)((height >> 8) & 0xff);
+        if (SDL_SetWindowFullscreen(sWindow, SDL_WINDOW_FULLSCREEN_DESKTOP) < 0) {
+            fprintf(stderr, "[platform] Could not enable fullscreen HQ output: %s\n",
+                SDL_GetError());
+            sUpscaleMode = previousMode;
+            return;
+        }
+        SDL_GetRendererOutputSize(sRenderer, &width, &height);
+        fprintf(stderr, "[platform] HQ output active at %dx%d (display native resolution)\n",
+            width, height);
+        return;
+    }
+    if (previousMode == kPlatformOutput4K) {
+        Uint32 flags = gPrefs.unused[4] ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0;
+        if (SDL_SetWindowFullscreen(sWindow, flags) < 0)
+            fprintf(stderr, "[platform] Could not leave fullscreen HQ output: %s\n",
+                SDL_GetError());
+    }
+    columns = sWindowViewCount > 1 ? 2 : 1;
+    rows = sWindowViewCount > 2 ? 2 : 1;
+    SDL_SetWindowSize(sWindow, columns * SCREEN_WIDTH * scale,
+        rows * SCREEN_HEIGHT * scale);
+}
+
+void Platform_SetAIDetailSprite(int id, int width, int height,
+                                const tPixel *pixels)
+{
+    SDL_Texture *texture;
+    SDL_PixelFormat *format;
+    UInt32 *rgba;
+    size_t pixelCount;
+    size_t i;
+    int index = id - 128;
+    if (!sRenderer || index < 0 || index >= 300 || !pixels ||
+        width <= 0 || height <= 0)
+        return;
+    format = SDL_AllocFormat(SDL_PIXELFORMAT_RGBA32);
+    if (!format) {
+        fprintf(stderr, "[platform] Could not allocate AI sprite pixel format: %s\n",
+            SDL_GetError());
+        return;
+    }
+    pixelCount = (size_t)width * height;
+    rgba = (UInt32 *)malloc(pixelCount * sizeof(*rgba));
+    if (!rgba) {
+        fprintf(stderr, "[platform] Could not allocate AI sprite texture pixels\n");
+        SDL_FreeFormat(format);
+        return;
+    }
+    for (i = 0; i < pixelCount; ++i) {
+        tPixel color = pixels[i];
+        rgba[i] = SDL_MapRGBA(format, (UInt8)(color >> 16), (UInt8)(color >> 8),
+            (UInt8)color, (UInt8)(color >> 24));
+    }
+    SDL_FreeFormat(format);
+    texture = SDL_CreateTexture(sRenderer, SDL_PIXELFORMAT_RGBA32,
+        SDL_TEXTUREACCESS_STATIC, width, height);
+    if (!texture) {
+        fprintf(stderr, "[platform] Could not create AI sprite texture: %s\n",
+            SDL_GetError());
+        free(rgba);
+        return;
+    }
+    if (SDL_UpdateTexture(texture, NULL, rgba, width * (int)sizeof(*rgba)) < 0) {
+        fprintf(stderr, "[platform] Could not upload AI sprite texture: %s\n",
+            SDL_GetError());
+        SDL_DestroyTexture(texture);
+        free(rgba);
+        return;
+    }
+    SDL_SetTextureBlendMode(texture, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(texture, SDL_ScaleModeLinear);
+    free(rgba);
+    if (sAIDetailTextures[index])
+        SDL_DestroyTexture(sAIDetailTextures[index]);
+    sAIDetailTextures[index] = texture;
+}
+
+void Platform_ClearAIDetailSprites(void)
+{
+    int i;
+    for (i = 0; i < 300; ++i) {
+        if (sAIDetailTextures[i]) {
+            SDL_DestroyTexture(sAIDetailTextures[i]);
+            sAIDetailTextures[i] = NULL;
+        }
+    }
+    sAIDetailDrawCount = 0;
+}
+
+void Platform_QueueAIDetailSprite(int id, float centerX, float centerY,
+                                  float direction, float zoom)
+{
+    int index = id - 128;
+    if (!sUpscaleMode || sRenderScale > 1 || index < 0 || index >= 300 ||
+        !sAIDetailTextures[index])
+        return;
+    if (sAIDetailDrawCount >= (int)(sizeof(sAIDetailDraws) / sizeof(sAIDetailDraws[0]))) {
+        if (!sAIDetailQueueWarning) {
+            fprintf(stderr, "[platform] AI sprite overlay queue is full for this frame\n");
+            sAIDetailQueueWarning = 1;
+        }
+        return;
+    }
+    sAIDetailDraws[sAIDetailDrawCount++] = (tAIDetailDraw){
+        index, centerX, centerY, direction, zoom
+    };
+}
+
+static void RenderAIDetailSprites(const SDL_Rect *viewport)
+{
+    float scale = (float)viewport->w / sRenderWidth;
+    int i;
+    if (sUpscaleMode) {
+        SDL_RenderSetClipRect(sRenderer, viewport);
+        for (i = 0; i < sAIDetailDrawCount; ++i) {
+            const tAIDetailDraw *draw = &sAIDetailDraws[i];
+            SDL_Texture *sprite = sAIDetailTextures[draw->spriteIndex];
+            if (sprite) {
+                int width, height;
+                SDL_Rect target;
+                SDL_QueryTexture(sprite, NULL, NULL, &width, &height);
+                target.w = (int)(width * draw->zoom * scale / 4.0f + 0.5f);
+                target.h = (int)(height * draw->zoom * scale / 4.0f + 0.5f);
+                target.x = viewport->x +
+                    (int)(draw->centerX * scale - target.w / 2.0f + 0.5f);
+                target.y = viewport->y +
+                    (int)(draw->centerY * scale - target.h / 2.0f + 0.5f);
+                SDL_SetTextureColorMod(sprite, sFadeBrightness,
+                    sFadeBrightness, sFadeBrightness);
+                if (SDL_RenderCopyEx(sRenderer, sprite, NULL, &target,
+                    draw->direction * (180.0 / M_PI), NULL, SDL_FLIP_NONE) < 0)
+                    fprintf(stderr, "[platform] Could not draw AI sprite: %s\n",
+                        SDL_GetError());
+            }
+        }
+        SDL_RenderSetClipRect(sRenderer, NULL);
+    }
+    sAIDetailDrawCount = 0;
 }
 
 void Platform_ScaleToFitWindow(void)
@@ -184,18 +473,19 @@ void Platform_ScaleToFitWindow(void)
     /* Scale to fit window while preserving 4:3 aspect ratio (letterbox if needed) */
     int outW, outH;
     SDL_GetRendererOutputSize(sRenderer, &outW, &outH);
-    float scaleX = (float)outW / SCREEN_WIDTH;
-    float scaleY = (float)outH / SCREEN_HEIGHT;
+    float scaleX = (float)outW / sRenderWidth;
+    float scaleY = (float)outH / sRenderHeight;
     float scale  = (scaleX < scaleY) ? scaleX : scaleY;
 
     SDL_Rect dst;
-    dst.w = (int)(SCREEN_WIDTH  * scale);
-    dst.h = (int)(SCREEN_HEIGHT * scale);
+    dst.w = (int)(sRenderWidth  * scale);
+    dst.h = (int)(sRenderHeight * scale);
     dst.x = (outW - dst.w) / 2;
     dst.y = (outH - dst.h) / 2;
 
     SDL_RenderCopy(sRenderer, sTexture, NULL, &dst);
-    SDL_RenderPresent(sRenderer);
+    RenderAIDetailSprites(&dst);
+    PresentFrame();
 }
 
 void Platform_FadeScreen(int fade)
@@ -241,10 +531,10 @@ void Platform_ScreenClear(void)
     memset(sFramebuffer, 0, sizeof(sFramebuffer));
 }
 
-UInt16 *Platform_GetFramebuffer(int *rowBytes)
+tPixel *Platform_GetFramebuffer(int *rowBytes)
 {
     if (rowBytes)
-        *rowBytes = SCREEN_WIDTH * (int)sizeof(UInt16); /* 1280 */
+        *rowBytes = sRenderWidth * (int)sizeof(tPixel);
     return sFramebuffer;
 }
 

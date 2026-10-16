@@ -7,23 +7,41 @@
  */
 
 #include "compat.h"
+#include "pixel.h"
 #include <SDL.h>
 
 /* Screen */
 #define SCREEN_WIDTH  640
 #define SCREEN_HEIGHT 480
 #define FRAMEBUFFER_GUARD_ROWS 64
+#define PLATFORM_MAX_RENDER_SCALE 4
+#define PLATFORM_HQ_RENDER_SCALE 2
 
 void Platform_InitScreen(void);
 void Platform_ShutdownScreen(void);
 void Platform_Blit2Screen(void);
+void Platform_BeginMultiView(int viewCount);
 void Platform_ScaleToFitWindow(void);
+int Platform_GetRenderScale(void);
+int Platform_GetRenderWidth(void);
+int Platform_GetRenderHeight(void);
+enum {
+    kPlatformOutputOriginal = 0,
+    kPlatformOutput2X,
+    kPlatformOutput4K
+};
+void Platform_SetUpscaleMode(int outputMode);
+void Platform_SetAIDetailSprite(int id, int width, int height,
+                                const tPixel *pixels);
+void Platform_ClearAIDetailSprites(void);
+void Platform_QueueAIDetailSprite(int id, float centerX, float centerY,
+                                  float direction, float zoom);
 void Platform_ToggleFullscreen(void);
 void Platform_FadeScreen(int fade);
 void Platform_ScreenClear(void);
 
-/* Returns pointer to the 16-bit (RGB555) pixel buffer and its row stride */
-UInt16* Platform_GetFramebuffer(int *rowBytes);
+/* Returns the 32-bit framebuffer (see pixel.h) and its row stride in bytes */
+tPixel* Platform_GetFramebuffer(int *rowBytes);
 
 /* Input */
 void Platform_InitInput(void);
@@ -80,6 +98,7 @@ enum {
 
 /* Timing */
 UInt64 Platform_GetMicroseconds(void);
+UInt64 Platform_TakePresentMicroseconds(void);
 
 /* Cursor */
 void Platform_ShowCursor(void);

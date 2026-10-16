@@ -1,0 +1,953 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Reckless Drivin' – Level-Editor</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #101418;
+      color: #e8edf0;
+      font-synthesis: none;
+      --panel: #1a2127;
+      --line: #303a42;
+      --muted: #a5b0b8;
+      --accent: #64d8b5;
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; min-width: 360px; }
+    button, input { font: inherit; }
+    button, .file-button {
+      border: 1px solid #43515a;
+      border-radius: 6px;
+      background: #252f36;
+      color: inherit;
+      padding: 8px 11px;
+      cursor: pointer;
+    }
+    button:hover, .file-button:hover { background: #33414a; }
+    button:disabled { opacity: .45; cursor: default; }
+    button.primary { background: #14775f; border-color: #22977a; }
+    button.active { outline: 2px solid var(--accent); }
+    input[type="number"], input[type="text"] {
+      width: 100%;
+      border: 1px solid #43515a;
+      border-radius: 5px;
+      background: #11171b;
+      color: inherit;
+      padding: 7px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 13px 18px;
+      border-bottom: 1px solid var(--line);
+      background: #171e23;
+    }
+    h1 { margin: 0; font-size: 17px; }
+    header p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+    .toolbar, .tool-group { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    main { display: grid; grid-template-columns: minmax(450px, 1fr) 330px; gap: 12px; padding: 12px; }
+    .work-area, aside { min-width: 0; }
+    .toolbar {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px 8px 0 0;
+      padding: 8px;
+    }
+    .separator { width: 1px; height: 28px; background: var(--line); margin: 0 2px; }
+    #viewport {
+      position: relative;
+      height: min(78vh, 880px);
+      min-height: 520px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-top: 0;
+      border-radius: 0 0 8px 8px;
+      background: #0d1714;
+    }
+    #viewport.game-view { height: auto; aspect-ratio: 4 / 3; min-height: 0; max-height: min(75vh, 720px); }
+    canvas { display: block; width: 100%; height: 100%; cursor: crosshair; touch-action: none; }
+    .canvas-hint {
+      position: absolute; left: 12px; bottom: 10px; padding: 6px 8px;
+      color: #d0d9d9; background: #101a17d9; border: 1px solid #34443d;
+      border-radius: 5px; font-size: 11px; pointer-events: none;
+    }
+    aside { display: flex; flex-direction: column; gap: 10px; }
+    .panel {
+      padding: 13px;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+    }
+    .panel h2 { margin: 0 0 11px; font-size: 14px; }
+    .panel p { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+    label { display: block; color: #c2cbd0; font-size: 11px; }
+    label input { display: block; margin-top: 4px; }
+    .field-actions { display: flex; gap: 7px; margin-top: 10px; }
+    .field-actions button { flex: 1; }
+    #selection-title { color: var(--accent); }
+    #stats { color: var(--muted); font-size: 11px; line-height: 1.6; }
+    #status { min-height: 18px; color: var(--accent); font-size: 12px; margin-top: 8px; }
+    .legend { display: flex; gap: 12px; flex-wrap: wrap; color: var(--muted); font-size: 11px; }
+    .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
+    .file-button input { display: none; }
+    @media (max-width: 900px) {
+      main { grid-template-columns: minmax(0, 1fr); }
+      aside { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 600px) {
+      aside { grid-template-columns: minmax(0, 1fr); }
+      header { align-items: flex-start; gap: 12px; flex-direction: column; }
+      #viewport { min-height: 420px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Reckless Drivin' – Level-Editor</h1>
+      <p>Lokaler Editor für den JSON-Export. Änderungen werden nicht direkt in die Spieldatei Data geschrieben.</p>
+    </div>
+    <div class="tool-group">
+      <label class="file-button">Level-JSON öffnen<input id="file-input" type="file" accept=".json,application/json"></label>
+      <label class="file-button">Spieltexturen laden<input id="texture-input" type="file" webkitdirectory multiple></label>
+      <label class="file-button">Objektsprites laden<input id="sprite-input" type="file" webkitdirectory multiple></label>
+      <button id="save-button" class="primary" disabled>JSON speichern</button>
+      <button id="undo-button" disabled>Rückgängig</button>
+      <button id="fit-button">Ansicht einpassen</button>
+    </div>
+  </header>
+  <main>
+    <section class="work-area">
+      <div class="toolbar">
+        <div class="tool-group">
+          <button id="map-view" class="active" disabled>Karte</button>
+          <button id="drive-view" disabled>Fahransicht</button>
+        </div>
+        <div class="tool-group" id="map-tools">
+          <button id="select-tool" class="active" disabled>Auswahl / Straße</button>
+          <button id="add-object-tool" disabled>Objekt platzieren</button>
+          <button id="add-up-tool" disabled>KI-Punkt ↑ hinzufügen</button>
+          <button id="add-down-tool" disabled>KI-Punkt ↓ hinzufügen</button>
+        </div>
+        <label id="brush-control" style="width:130px">Straßen-Pinsel (Segmente)
+          <input id="brush-radius" type="number" min="1" max="2000" step="1" value="80" disabled>
+        </label>
+        <div id="drive-controls" class="tool-group" hidden>
+          <label style="width:180px">Streckenposition
+            <input id="camera-y" type="range" min="0" max="40240" value="500" disabled>
+          </label>
+          <label style="width:150px">Kamera-X-Versatz
+            <input id="camera-x-offset" type="range" min="-1000" max="1000" step="10" value="0" disabled>
+          </label>
+          <label style="width:130px">Geschwindigkeit
+            <input id="camera-speed" type="range" min="0" max="90" value="30" disabled>
+          </label>
+          <span id="camera-readout" style="color:var(--muted);font-size:11px"></span>
+        </div>
+      </div>
+      <div id="viewport">
+        <canvas id="map" aria-label="Level-Strecke"></canvas>
+        <div id="map-hint" class="canvas-hint">Mausrad: Zoom · Mittlere Maustaste: Verschieben · Ziehen: Objekt, KI-Punkt oder Straße bearbeiten</div>
+      </div>
+      <div id="status">Öffne eines der level-XX.json Dateien aus build/level-data.</div>
+    </section>
+    <aside>
+      <section class="panel">
+        <h2>Level-Eigenschaften</h2>
+        <div class="field-grid">
+          <label>Name<input id="level-name" type="text" disabled></label>
+          <label>Levelnummer<input id="level-number" type="number" disabled></label>
+          <label>Zeit (Sek.)<input id="level-time" type="number" disabled></label>
+          <label>Start-X<input id="start-x" type="number" disabled></label>
+          <label>Level-Ende<input id="level-end" type="number" disabled></label>
+          <label>Straßeninfo-ID<input id="road-info-id" type="number" disabled></label>
+        </div>
+      </section>
+      <section class="panel">
+        <h2 id="selection-title">Auswahl</h2>
+        <div id="selection-fields"><p>Klicke nach dem Laden auf ein Objekt, einen KI-Punkt oder die Straße.</p></div>
+      </section>
+      <section class="panel">
+        <h2>Oberfläche / Physik</h2>
+        <div class="field-grid">
+          <label>Grip / Reibung<input data-road-info="friction" type="number" step="any" disabled></label>
+          <label>Luftwiderstand<input data-road-info="airResistance" type="number" step="any" disabled></label>
+          <label>Rutsch-Reibung<input data-road-info="slideFriction" type="number" step="any" disabled></label>
+          <label>Track-Rutschen<input data-road-info="trackSlide" type="number" step="any" disabled></label>
+          <label>Hintergrund-Textur-ID<input data-road-info="backgroundTextureId" type="number" disabled></label>
+          <label>Straßen-Textur-ID<input data-road-info="foregroundTextureId" type="number" disabled></label>
+        </div>
+      </section>
+      <section class="panel">
+        <h2>Ansicht & Status</h2>
+        <div class="legend">
+          <span><i class="dot" style="background:#8c989c"></i>Straße</span>
+          <span><i class="dot" style="background:#f0a164"></i>Objekte</span>
+          <span><i class="dot" style="background:#66c9ff"></i>KI-Spuren</span>
+          <span><i class="dot" style="background:#f5de80"></i>Markierungen</span>
+        </div>
+        <div id="stats" style="margin-top:10px">Noch kein Level geladen.</div>
+        <p>Die JSON-Datei enthält die Streckenquerschnitte, Objektpositionen und KI-Spuren. Eine Rückwandlung in ein spielbares Data-Pack ist noch nicht Teil dieses Editors.</p>
+      </section>
+    </aside>
+  </main>
+  <script>
+    (() => {
+      "use strict";
+      const canvas = document.querySelector("#map");
+      const ctx = canvas.getContext("2d");
+      const gameCanvas = document.createElement("canvas");
+      gameCanvas.width = 640; gameCanvas.height = 480;
+      const gameCtx = gameCanvas.getContext("2d");
+      const viewport = document.querySelector("#viewport");
+      const status = document.querySelector("#status");
+      const fields = document.querySelector("#selection-fields");
+      const history = [];
+      let level = null;
+      let selection = null;
+      let mode = "select";
+      let transform = { scale: 1, x: 0, y: 0 };
+      let dragging = null;
+      let dirty = false;
+      let viewMode = "map";
+      const textureManifest = new Map();
+      const textureFiles = new Map();
+      const loadedTextures = new Map();
+      const spriteFiles = new Map();
+      const loadedSprites = new Map();
+      const STRETCH_X = 5;
+
+      const clone = value => JSON.parse(JSON.stringify(value));
+      const enabled = value => document.querySelectorAll("main input, main button").forEach(el => { el.disabled = !value; });
+      const setStatus = message => { status.textContent = message; };
+      const changed = message => {
+        dirty = true;
+        document.querySelector("#save-button").disabled = false;
+        setStatus(message);
+        refresh();
+        draw();
+      };
+      const checkpoint = () => {
+        if (!level) return;
+        history.push(clone(level));
+        if (history.length > 40) history.shift();
+        document.querySelector("#undo-button").disabled = false;
+      };
+      const undo = () => {
+        if (!history.length) return;
+        level = history.pop();
+        dirty = history.length > 0;
+        selection = null;
+        document.querySelector("#undo-button").disabled = history.length === 0;
+        document.querySelector("#save-button").disabled = !dirty;
+        refresh();
+        draw();
+        setStatus("Letzte Änderung rückgängig gemacht.");
+      };
+      const allRoadXs = () => level.roadSegments.flat().filter(Number.isFinite);
+      const bounds = () => {
+        let minX = Infinity, maxX = -Infinity;
+        const includeX = x => { minX = Math.min(minX, x); maxX = Math.max(maxX, x); };
+        allRoadXs().forEach(includeX);
+        level.objects.forEach(o => includeX(o.x));
+        level.trackUp.concat(level.trackDown).forEach(p => includeX(p.x));
+        const maxY = level.objects.concat(level.trackUp, level.trackDown).reduce(
+          (max, p) => Math.max(max, p.y), Math.max(level.roadSegments.length * 2, level.metadata.levelEnd));
+        return { minX: minX - 100, maxX: maxX + 100, minY: 0, maxY: Math.max(1, maxY) };
+      };
+      const fit = () => {
+        if (!level) return;
+        const b = bounds(), rect = canvas.getBoundingClientRect();
+        const pad = 35;
+        transform.scale = Math.min((rect.width - pad * 2) / ((b.maxX - b.minX) * STRETCH_X),
+          (rect.height - pad * 2) / (b.maxY - b.minY));
+        transform.x = (rect.width - (b.maxX - b.minX) * transform.scale * STRETCH_X) / 2 -
+          b.minX * transform.scale * STRETCH_X;
+        transform.y = pad - b.minY * transform.scale;
+        draw();
+      };
+      const screen = (x, y) => ({ x: transform.x + x * transform.scale * STRETCH_X, y: transform.y + y * transform.scale });
+      const world = (x, y) => ({ x: (x - transform.x) / (transform.scale * STRETCH_X), y: (y - transform.y) / transform.scale });
+      const resize = () => {
+        const rect = canvas.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+        canvas.width = Math.max(1, Math.round(rect.width * dpr));
+        canvas.height = Math.max(1, Math.round(rect.height * dpr));
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (level) fit();
+      };
+      const draw = () => {
+        const rect = canvas.getBoundingClientRect();
+        ctx.setTransform(window.devicePixelRatio || 1, 0, 0, window.devicePixelRatio || 1, 0, 0);
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        ctx.fillStyle = "#0d1714";
+        ctx.fillRect(0, 0, rect.width, rect.height);
+        if (!level) {
+          ctx.fillStyle = "#9eaaa7"; ctx.textAlign = "center"; ctx.font = "14px system-ui";
+          ctx.fillText("Level-JSON hier öffnen, um die Strecke zu bearbeiten", rect.width / 2, rect.height / 2);
+          return;
+        }
+        if (viewMode === "drive") {
+          drawGameplay(rect);
+          return;
+        }
+        ctx.save();
+        ctx.translate(transform.x, transform.y);
+        ctx.scale(transform.scale * STRETCH_X, transform.scale);
+        const road = level.roadSegments;
+        ctx.beginPath();
+        road.forEach((s, i) => { const y = i * 2; if (i === 0) ctx.moveTo(s[0], y); else ctx.lineTo(s[0], y); });
+        for (let i = road.length - 1; i >= 0; --i) ctx.lineTo(road[i][3], i * 2);
+        ctx.closePath();
+        ctx.fillStyle = "#394247"; ctx.fill();
+        ctx.lineWidth = Math.max(1 / transform.scale, 0.7);
+        const drawRoadLine = (index, color, dash = []) => {
+          ctx.beginPath();
+          road.forEach((s, i) => { if (!i) ctx.moveTo(s[index], i * 2); else ctx.lineTo(s[index], i * 2); });
+          ctx.strokeStyle = color; ctx.setLineDash(dash); ctx.stroke(); ctx.setLineDash([]);
+        };
+        drawRoadLine(0, "#e9d989");
+        drawRoadLine(3, "#e9d989");
+        drawRoadLine(1, "#9ea4a1", [8 / transform.scale, 10 / transform.scale]);
+        drawRoadLine(2, "#9ea4a1", [8 / transform.scale, 10 / transform.scale]);
+
+        const drawTrack = (items, color) => {
+          if (!items.length) return;
+          ctx.beginPath();
+          items.forEach((p, i) => { if (!i) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y); });
+          ctx.strokeStyle = color; ctx.lineWidth = Math.max(1.5 / transform.scale, 1);
+          ctx.setLineDash([5 / transform.scale, 6 / transform.scale]); ctx.stroke(); ctx.setLineDash([]);
+          items.forEach((p, i) => {
+            const radius = (selection?.type === "trackUp" && selection.index === i && items === level.trackUp) ||
+              (selection?.type === "trackDown" && selection.index === i && items === level.trackDown) ? 5 : 2.5;
+            ctx.beginPath();
+            ctx.ellipse(p.x, p.y, radius / (transform.scale * STRETCH_X),
+              radius / transform.scale, 0, 0, Math.PI * 2);
+            ctx.fillStyle = color; ctx.fill();
+          });
+        };
+        drawTrack(level.trackUp, "#5fc7ff"); drawTrack(level.trackDown, "#bc8cff");
+        level.marks.forEach(mark => {
+          ctx.beginPath(); ctx.moveTo(mark.x1, mark.y1); ctx.lineTo(mark.x2, mark.y2);
+          ctx.strokeStyle = "#f2dc7d"; ctx.lineWidth = Math.max(1 / transform.scale, 0.6); ctx.stroke();
+        });
+        level.objects.forEach((obj, i) => {
+          const objectType = level.objectTypes?.find(type => type.resourceId === obj.typeResourceId);
+          const sprite = objectType && loadedSprites.get(objectType.spriteId);
+          if (sprite) {
+            const p = screen(obj.x, obj.y);
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(-obj.direction);
+            ctx.scale(1 / STRETCH_X, 1);
+            ctx.drawImage(sprite.image, -sprite.width / 2, -sprite.height / 2,
+              sprite.width, sprite.height);
+            ctx.restore();
+          }
+          const radius = selection?.type === "object" && selection.index === i ? 7 : 4;
+          if (!sprite) {
+            ctx.beginPath();
+            ctx.ellipse(obj.x, obj.y, radius / (transform.scale * STRETCH_X),
+              radius / transform.scale, 0, 0, Math.PI * 2);
+            ctx.fillStyle = "#f0a164"; ctx.fill();
+          }
+          if (selection?.type === "object" && selection.index === i) {
+            if (sprite) {
+              const p = screen(obj.x, obj.y);
+              ctx.save(); ctx.setTransform(window.devicePixelRatio || 1, 0, 0,
+                window.devicePixelRatio || 1, 0, 0);
+              ctx.beginPath(); ctx.arc(p.x, p.y, 9, 0, Math.PI * 2);
+              ctx.strokeStyle = "#fff2d7"; ctx.lineWidth = 2; ctx.stroke(); ctx.restore();
+            } else {
+            ctx.strokeStyle = "#fff2d7"; ctx.lineWidth = 1 / transform.scale; ctx.stroke();
+            }
+          }
+        });
+        if (selection?.type === "road") {
+          const s = road[selection.index];
+          if (s) {
+            const y = selection.index * 2;
+            ctx.beginPath(); ctx.moveTo(s[0], y); ctx.lineTo(s[3], y);
+            ctx.strokeStyle = "#64d8b5"; ctx.lineWidth = 3 / transform.scale; ctx.stroke();
+          }
+        }
+        ctx.restore();
+      };
+      const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+      const sampleTexture = (texture, u, v, fallback) => {
+        if (!texture) return fallback;
+        const x = ((Math.floor(u) % texture.width) + texture.width) % texture.width;
+        const y = ((Math.floor(v) % texture.height) + texture.height) % texture.height;
+        const i = (y * texture.width + x) * 4;
+        return [texture.pixels[i], texture.pixels[i + 1], texture.pixels[i + 2]];
+      };
+      const drawGameplay = rect => {
+        const width = 640, height = 480;
+        const road = level.roadSegments;
+        const playerY = Number(document.querySelector("#camera-y").value);
+        const speed = Number(document.querySelector("#camera-speed").value);
+        const zoom = 0.5 + speed / 50;
+        const centerRow = clamp(Math.floor(playerY / 2), 0, road.length - 1);
+        const cameraX = (road[centerRow][0] + road[centerRow][3]) * 0.5 +
+          Number(document.querySelector("#camera-x-offset").value);
+        const xDrawStart = cameraX - width * 0.5 * zoom;
+        const yDrawStart = playerY + height * 0.55 * zoom;
+        const roadTexture = loadedTextures.get(level.roadInfo.foregroundTextureId);
+        const backgroundTexture = loadedTextures.get(level.roadInfo.backgroundTextureId);
+        const leftBorder = loadedTextures.get(level.roadInfo.leftBorderTextureId);
+        const rightBorder = loadedTextures.get(level.roadInfo.rightBorderTextureId);
+        const pixels = gameCtx.createImageData(width, height);
+        const fallbackRoad = [69, 74, 76], fallbackGround = [30, 59, 43];
+        const fallbackBorder = [223, 207, 134];
+
+        for (let sy = 0; sy < height; ++sy) {
+          const worldY = clamp(yDrawStart - sy * zoom, 0, road.length * 2);
+          const rowPosition = worldY * 0.5;
+          const ceilIndex = Math.min(road.length - 1, Math.ceil(rowPosition));
+          const floorIndex = Math.min(road.length - 1, Math.floor(rowPosition));
+          let blend = Math.ceil(rowPosition) - rowPosition;
+          const lower = road[floorIndex], upper = road[ceilIndex];
+          const upperSplit = upper[1] !== upper[2], lowerSplit = lower[1] !== lower[2];
+          if (upperSplit !== lowerSplit) blend = upperSplit ? 1 : 0;
+          else if (upperSplit && lowerSplit &&
+              (upper[3] < lower[2] || upper[2] > lower[3])) blend = 1;
+          const edges = lower.map((v, i) => (1 - blend) * upper[i] + blend * v);
+          const screenEdges = edges.map(x => (x - xDrawStart) / zoom);
+          const borderPixels = Math.floor(16 / zoom);
+          for (let sx = 0; sx < width; ++sx) {
+            const worldX = xDrawStart + sx * zoom;
+            const roadSurface = (sx >= screenEdges[0] && sx < screenEdges[1]) ||
+              (sx >= screenEdges[2] && sx < screenEdges[3]);
+            const texture = roadSurface ? roadTexture : backgroundTexture;
+            let color = sampleTexture(texture, worldX, -worldY,
+              roadSurface ? fallbackRoad : fallbackGround);
+            let borderSample = null;
+            const sampleBorderSpan = (spanStart, spanEnd, leftTexture, rightTexture) => {
+              const start = Math.max(0, Math.ceil(spanStart));
+              const end = Math.min(width, Math.floor(spanEnd));
+              if (sx < start || sx >= end) return null;
+              let leftEnd = start + borderPixels;
+              let rightStart = end - borderPixels;
+              if (leftEnd > rightStart) {
+                leftEnd = rightStart = start + Math.floor((end - start) / 2);
+              }
+              if (sx < leftEnd && sx < end)
+                return [leftTexture, Math.max(0,
+                  (sx - (Number.isFinite(spanStart) ? spanStart : 0)) * zoom)];
+              if (sx >= rightStart && sx >= start)
+                return [rightTexture, Math.max(0,
+                  (sx - ((Number.isFinite(spanEnd) ? spanEnd : width) - 16 / zoom)) * zoom)];
+              return null;
+            };
+            borderSample = sampleBorderSpan(-Infinity, screenEdges[0], leftBorder, rightBorder) ||
+              sampleBorderSpan(screenEdges[1], screenEdges[2], leftBorder, rightBorder) ||
+              sampleBorderSpan(screenEdges[3], Infinity, leftBorder, rightBorder);
+            if (borderSample)
+              color = sampleTexture(borderSample[0], borderSample[1], -worldY, fallbackBorder);
+            const offset = (sy * width + sx) * 4;
+            pixels.data[offset] = color[0];
+            pixels.data[offset + 1] = color[1];
+            pixels.data[offset + 2] = color[2];
+            pixels.data[offset + 3] = 255;
+          }
+        }
+        gameCtx.putImageData(pixels, 0, 0);
+        for (const mark of level.marks) {
+          const x = Math.round((mark.x1 - xDrawStart) / zoom) - 2;
+          const y = Math.round((yDrawStart - mark.y1) / zoom);
+          if (x >= 0 && x < width - 4 && y >= 0 && y < height) {
+            const color = sampleTexture(loadedTextures.get(level.roadInfo.marksId),
+              0, -mark.y1, [231, 218, 156]);
+            gameCtx.fillStyle = `rgb(${color[0]} ${color[1]} ${color[2]})`;
+            gameCtx.fillRect(x, y, 4, 1);
+          }
+        }
+        const visibleObjects = level.objects
+          .filter(obj => Math.abs(obj.y - yDrawStart) <= height * zoom * 1.5)
+          .slice()
+          .sort((a, b) => b.y - a.y);
+        for (const obj of visibleObjects) {
+          const objectType = level.objectTypes?.find(type => type.resourceId === obj.typeResourceId);
+          const sprite = objectType && loadedSprites.get(objectType.spriteId);
+          if (!sprite) continue;
+          const x = (obj.x - xDrawStart) / zoom;
+          const y = (yDrawStart - obj.y) / zoom;
+          if (x < -sprite.width || x > width + sprite.width ||
+              y < -sprite.height || y > height + sprite.height) continue;
+          gameCtx.save();
+          gameCtx.translate(x, y);
+          gameCtx.rotate(-obj.direction);
+          gameCtx.scale(1 / zoom, 1 / zoom);
+          gameCtx.drawImage(sprite.image, -sprite.width / 2, -sprite.height / 2);
+          gameCtx.restore();
+        }
+        const dpr = window.devicePixelRatio || 1;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        ctx.drawImage(gameCanvas, 0, 0, rect.width, rect.height);
+        document.querySelector("#camera-readout").textContent =
+          `${Math.round(playerY).toLocaleString()} / ${Math.round(road.length * 2).toLocaleString()} · Zoom ${zoom.toFixed(2)}×`;
+      };
+      const readPpm = async (file, width = 0, height = 0) => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let pos = 0;
+        const token = () => {
+          while (pos < bytes.length) {
+            if (bytes[pos] === 35) {
+              while (pos < bytes.length && bytes[pos] !== 10) ++pos;
+            } else if (bytes[pos] <= 32) ++pos;
+            else break;
+          }
+          const start = pos;
+          while (pos < bytes.length && bytes[pos] > 32 && bytes[pos] !== 35) ++pos;
+          return new TextDecoder().decode(bytes.subarray(start, pos));
+        };
+        if (token() !== "P6") throw new Error(`${file.name}: PPM muss binär (P6) sein.`);
+        const ppmWidth = Number(token()), ppmHeight = Number(token()), max = Number(token());
+        if (!Number.isInteger(ppmWidth) || !Number.isInteger(ppmHeight) || max !== 255 ||
+            (width && width > ppmWidth) || (height && height > ppmHeight))
+          throw new Error(`${file.name}: ungültige PPM-Abmessungen.`);
+        if (bytes[pos] === 13 && bytes[pos + 1] === 10) pos += 2;
+        else if (bytes[pos] <= 32) ++pos;
+        width = width || ppmWidth;
+        height = height || ppmHeight;
+        const pixels = new Uint8ClampedArray(width * height * 4);
+        for (let y = 0; y < height; ++y) for (let x = 0; x < width; ++x) {
+          const source = pos + (y * ppmWidth + x) * 3, target = (y * width + x) * 4;
+          if (source + 2 >= bytes.length) throw new Error(`${file.name}: PPM-Daten sind abgeschnitten.`);
+          pixels[target] = bytes[source]; pixels[target + 1] = bytes[source + 1];
+          pixels[target + 2] = bytes[source + 2]; pixels[target + 3] = 255;
+        }
+        return { width, height, pixels };
+      };
+      const readPgm = async (file, width, height) => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        let pos = 0;
+        const token = () => {
+          while (pos < bytes.length) {
+            if (bytes[pos] === 35) {
+              while (pos < bytes.length && bytes[pos] !== 10) ++pos;
+            } else if (bytes[pos] <= 32) ++pos;
+            else break;
+          }
+          const start = pos;
+          while (pos < bytes.length && bytes[pos] > 32 && bytes[pos] !== 35) ++pos;
+          return new TextDecoder().decode(bytes.subarray(start, pos));
+        };
+        if (token() !== "P5") throw new Error(`${file.name}: PGM muss binär (P5) sein.`);
+        const pgmWidth = Number(token()), pgmHeight = Number(token()), max = Number(token());
+        if (pgmWidth !== width || pgmHeight !== height || max !== 255)
+          throw new Error(`${file.name}: Sprite-Maske passt nicht zum Bild.`);
+        if (bytes[pos] === 13 && bytes[pos + 1] === 10) pos += 2;
+        else if (bytes[pos] <= 32) ++pos;
+        const alpha = bytes.slice(pos, pos + width * height);
+        if (alpha.length !== width * height) throw new Error(`${file.name}: Sprite-Maske abgeschnitten.`);
+        return alpha;
+      };
+      const makeSpriteImage = (rgb, alpha) => {
+        const surface = document.createElement("canvas");
+        surface.width = rgb.width; surface.height = rgb.height;
+        const surfaceContext = surface.getContext("2d");
+        const imageData = surfaceContext.createImageData(rgb.width, rgb.height);
+        for (let i = 0; i < alpha.length; ++i) {
+          imageData.data[i * 4] = rgb.pixels[i * 4];
+          imageData.data[i * 4 + 1] = rgb.pixels[i * 4 + 1];
+          imageData.data[i * 4 + 2] = rgb.pixels[i * 4 + 2];
+          imageData.data[i * 4 + 3] = alpha[i];
+        }
+        surfaceContext.putImageData(imageData, 0, 0);
+        return surface;
+      };
+      const loadCurrentTextures = async () => {
+        if (!level) return;
+        const ids = [
+          level.roadInfo.backgroundTextureId, level.roadInfo.foregroundTextureId,
+          level.roadInfo.leftBorderTextureId, level.roadInfo.rightBorderTextureId
+        ];
+        for (const id of ids) {
+          if (loadedTextures.has(id)) continue;
+          const info = textureManifest.get(id);
+          const file = info && textureFiles.get(info.fileName);
+          if (file) loadedTextures.set(id, await readPpm(file, info.width, info.height));
+        }
+        draw();
+      };
+      const loadTextureDirectory = async files => {
+        const entries = Array.from(files);
+        const manifestFile = entries.find(file => file.name === "MANIFEST" &&
+          (file.webkitRelativePath || "").includes("textures/"));
+        if (!manifestFile) throw new Error("Kein textures/MANIFEST gefunden. Bitte den Ordner level-editor-assets auswählen.");
+        const nextManifest = new Map(), nextFiles = new Map();
+        entries.forEach(file => {
+          const path = file.webkitRelativePath || "";
+          if (path.includes("/textures/") || path.startsWith("textures/"))
+            nextFiles.set(file.name, file);
+        });
+        const lines = (await manifestFile.text()).split(/\r?\n/);
+        for (const line of lines) {
+          const values = line.trim().split(/\s+/).map(Number);
+          if (values.length !== 4 || values.some(value => !Number.isFinite(value))) continue;
+          const [id, frame, width, height] = values;
+          if (frame === 0 || !nextManifest.has(id))
+            nextManifest.set(id, { fileName: `${id}_${frame}.ppm`, width, height });
+        }
+        textureManifest.clear(); nextManifest.forEach((value, key) => textureManifest.set(key, value));
+        textureFiles.clear(); nextFiles.forEach((value, key) => textureFiles.set(key, value));
+        loadedTextures.clear();
+        await loadCurrentTextures();
+        setStatus(`Originale Spieltexturen geladen (${textureManifest.size} Texturen im Manifest).`);
+      };
+      const loadSpriteDirectory = async files => {
+        const entries = Array.from(files);
+        const nextFiles = new Map();
+        entries.forEach(file => {
+          const path = file.webkitRelativePath || "";
+          if (path.includes("/sprites/") || path.startsWith("sprites/"))
+            nextFiles.set(file.name, file);
+        });
+        if (!nextFiles.size) throw new Error("Kein sprites-Ordner gefunden.");
+        spriteFiles.clear();
+        nextFiles.forEach((value, key) => spriteFiles.set(key, value));
+        loadedSprites.clear();
+        if (level?.objectTypes) {
+          for (const type of level.objectTypes) {
+            if (loadedSprites.has(type.spriteId)) continue;
+            const color = spriteFiles.get(`${type.spriteId}.ppm`);
+            const mask = spriteFiles.get(`${type.spriteId}.pgm`);
+            if (!color || !mask) continue;
+            const rgb = await readPpm(color);
+            const alpha = await readPgm(mask, rgb.width, rgb.height);
+            loadedSprites.set(type.spriteId, {
+              width: rgb.width, height: rgb.height, image: makeSpriteImage(rgb, alpha)
+            });
+          }
+        }
+        draw();
+        setStatus(`Objektsprites geladen (${loadedSprites.size} verwendete Sprites).`);
+      };
+      const refresh = () => {
+        if (!level) return;
+        document.querySelector("#level-name").value = level.name;
+        document.querySelector("#level-number").value = level.level;
+        document.querySelector("#level-time").value = level.metadata.time;
+        document.querySelector("#start-x").value = level.metadata.startX;
+        document.querySelector("#level-end").value = level.metadata.levelEnd;
+        document.querySelector("#road-info-id").value = level.metadata.roadInfoId;
+        document.querySelectorAll("[data-road-info]").forEach(input => {
+          input.value = level.roadInfo[input.dataset.roadInfo] ?? "";
+        });
+        document.querySelector("#stats").textContent =
+          `${level.roadSegments.length.toLocaleString()} Straßenquerschnitte · ${level.objects.length} Objekte · ${level.trackUp.length}/${level.trackDown.length} KI-Punkte · ${level.marks.length} Markierungen${dirty ? " · nicht gespeichert" : ""}`;
+        renderSelection();
+      };
+      const createField = (label, key, value, step = "1") => {
+        const wrapper = document.createElement("label");
+        wrapper.textContent = label;
+        const input = document.createElement("input");
+        input.type = "number"; input.step = step; input.value = value;
+        input.addEventListener("change", () => {
+          const n = Number(input.value);
+          if (!Number.isFinite(n)) { input.value = value; return; }
+          checkpoint();
+          if (selection.type === "road") level.roadSegments[selection.index][Number(key)] = n;
+          else if (selection.type === "object") level.objects[selection.index][key] = n;
+          else level[selection.type][selection.index][key] = n;
+          changed("Eigenschaft geändert.");
+        });
+        wrapper.append(input);
+        return wrapper;
+      };
+      const renderSelection = () => {
+        const title = document.querySelector("#selection-title");
+        fields.replaceChildren();
+        if (!selection) {
+          title.textContent = "Auswahl";
+          fields.innerHTML = "<p>Klicke auf ein Objekt, einen KI-Punkt oder die Straße.</p>";
+          return;
+        }
+        const actions = document.createElement("div");
+        actions.className = "field-actions";
+        const remove = document.createElement("button");
+        remove.textContent = selection.type === "object" ? "Objekt löschen" :
+          selection.type === "road" ? "Straßenquerschnitt" : "KI-Punkt löschen";
+        remove.disabled = selection.type === "road";
+        remove.addEventListener("click", () => {
+          checkpoint();
+          if (selection.type === "object") level.objects.splice(selection.index, 1);
+          else level[selection.type].splice(selection.index, 1);
+          selection = null; changed("Element gelöscht.");
+        });
+        actions.append(remove);
+
+        if (selection.type === "road") {
+          const i = selection.index, s = level.roadSegments[i];
+          title.textContent = `Straßenquerschnitt · #${i}`;
+          const grid = document.createElement("div"); grid.className = "field-grid";
+          ["Außen links", "Innen links", "Innen rechts", "Außen rechts"].forEach((label, n) => grid.append(createField(label, String(n), s[n])));
+          fields.append(grid);
+          const info = document.createElement("p"); info.textContent = "Ziehe die Straße horizontal, um den Verlauf mit weichem Pinsel lokal zu verschieben. Die vier Werte sind die seitlichen X-Koordinaten.";
+          fields.append(info);
+        } else if (selection.type === "object") {
+          const i = selection.index, obj = level.objects[i];
+          title.textContent = `Objekt · #${i}`;
+          const grid = document.createElement("div"); grid.className = "field-grid";
+          grid.append(createField("X", "x", obj.x), createField("Y", "y", obj.y),
+            createField("Richtung", "direction", obj.direction, "any"),
+            createField("Typ-Ressourcen-ID", "typeResourceId", obj.typeResourceId));
+          fields.append(grid, actions);
+        } else {
+          const i = selection.index, p = level[selection.type][i];
+          title.textContent = `${selection.type === "trackUp" ? "KI-Spur ↑" : "KI-Spur ↓"} · Punkt #${i}`;
+          const grid = document.createElement("div"); grid.className = "field-grid";
+          grid.append(createField("X", "x", p.x), createField("Y", "y", p.y),
+            createField("Geschwindigkeit", "speed", p.speed, "any"),
+            createField("Flags", "flags", p.flags));
+          fields.append(grid, actions);
+        }
+      };
+      const loadLevel = (data, fileName) => {
+        if (data.format !== "reckless-drivin-level-export-v1" ||
+            !Array.isArray(data.roadSegments) || !Array.isArray(data.objects) ||
+            !Array.isArray(data.trackUp) || !Array.isArray(data.trackDown) ||
+            !Array.isArray(data.marks) || !data.metadata || !data.roadInfo) {
+          throw new Error("Das ist kein unterstützter Level-JSON-Export.");
+        }
+        if (!data.roadSegments.length || data.roadSegments.some(s =>
+          !Array.isArray(s) || s.length !== 4 || s.some(v => !Number.isFinite(v)))) {
+          throw new Error("Die Straßenquerschnitte sind unvollständig oder ungültig.");
+        }
+        level = data;
+        if (!Array.isArray(level.objectTypes)) level.objectTypes = [];
+        history.length = 0; selection = null; dirty = false;
+        enabled(true);
+        document.querySelector("#camera-y").max = String(level.roadSegments.length * 2);
+        document.querySelector("#camera-y").value = String(Math.min(500, level.roadSegments.length * 2));
+        document.querySelector("#save-button").disabled = false;
+        document.querySelector("#undo-button").disabled = true;
+        refresh(); resize(); fit();
+        setStatus(`${fileName || "Level"} geladen. Änderungen mit „JSON speichern“ exportieren.`);
+        if (viewMode === "drive") loadCurrentTextures().catch(error => setStatus(error.message));
+        if (spriteFiles.size) loadSpriteDirectory(Array.from(spriteFiles.values()))
+          .catch(error => setStatus(`Objektsprites: ${error.message}`));
+      };
+      const nearestPoint = (items, pos, maxDistance) => {
+        let found = -1, best = maxDistance;
+        items.forEach((p, i) => {
+          const q = screen(p.x, p.y), d = Math.hypot(q.x - pos.x, q.y - pos.y);
+          if (d < best) { found = i; best = d; }
+        });
+        return found;
+      };
+      const canvasPos = event => {
+        const rect = canvas.getBoundingClientRect();
+        return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      };
+      const pointerDown = event => {
+        if (!level || viewMode !== "map") return;
+        const pos = canvasPos(event);
+        if (event.button === 1 || event.button === 2) {
+          dragging = { type: "pan", x: pos.x, y: pos.y, tx: transform.x, ty: transform.y, modified: false };
+          event.preventDefault(); return;
+        }
+        const p = world(pos.x, pos.y);
+        if (mode === "object") {
+          checkpoint();
+          level.objects.push({ x: Math.round(p.x), y: Math.round(p.y), direction: 0, typeResourceId: 128 });
+          selection = { type: "object", index: level.objects.length - 1 };
+          mode = "select"; setToolButtons(); changed("Objekt angelegt (Standardtyp 128; Ressourcen-ID kann rechts geändert werden).");
+          return;
+        }
+        if (mode === "trackUp" || mode === "trackDown") {
+          checkpoint();
+          const track = level[mode];
+          const entry = { flags: 0, x: Math.round(p.x), y: Math.round(p.y), speed: 30 };
+          track.push(entry); track.sort((a, b) => a.y - b.y);
+          selection = { type: mode, index: track.indexOf(entry) };
+          mode = "select"; setToolButtons(); changed("KI-Wegpunkt hinzugefügt.");
+          return;
+        }
+        let i = nearestPoint(level.objects, pos, 12);
+        if (i >= 0) selection = { type: "object", index: i };
+        else {
+          i = nearestPoint(level.trackUp, pos, 10);
+          if (i >= 0) selection = { type: "trackUp", index: i };
+          else {
+            i = nearestPoint(level.trackDown, pos, 10);
+            if (i >= 0) selection = { type: "trackDown", index: i };
+            else {
+              const row = Math.max(0, Math.min(level.roadSegments.length - 1, Math.round(p.y / 2)));
+              const s = level.roadSegments[row];
+              if (p.x >= s[0] - 30 && p.x <= s[3] + 30) selection = { type: "road", index: row };
+              else selection = null;
+            }
+          }
+        }
+        renderSelection(); draw();
+        if (selection) {
+          checkpoint();
+          dragging = { type: selection.type, x: p.x, y: p.y, modified: false };
+          canvas.setPointerCapture(event.pointerId);
+        }
+      };
+      const pointerMove = event => {
+        if (!dragging || !level) return;
+        const pos = canvasPos(event);
+        if (dragging.type === "pan") {
+          transform.x = dragging.tx + pos.x - dragging.x;
+          transform.y = dragging.ty + pos.y - dragging.y;
+          draw(); return;
+        }
+        const p = world(pos.x, pos.y);
+        const dx = p.x - dragging.x, dy = p.y - dragging.y;
+        if (!dragging.modified && Math.hypot(dx * transform.scale * STRETCH_X, dy * transform.scale) < 1)
+          return;
+        if (!dragging.modified) {
+          checkpoint();
+          dragging.modified = true;
+        }
+        if (dragging.type === "object") {
+          const obj = level.objects[selection.index];
+          obj.x = Math.round(obj.x + dx); obj.y = Math.round(obj.y + dy);
+        } else if (dragging.type === "trackUp" || dragging.type === "trackDown") {
+          const track = level[dragging.type], item = track[selection.index];
+          item.x = Math.round(item.x + dx); item.y = Math.round(item.y + dy);
+          dragging.y = p.y;
+          dragging.x = p.x;
+        } else if (dragging.type === "road") {
+          const row = selection.index;
+          const radius = Math.max(1, Number(document.querySelector("#brush-radius").value) || 1);
+          const delta = Math.round(dx);
+          if (delta) {
+            const start = Math.max(0, row - radius), end = Math.min(level.roadSegments.length - 1, row + radius);
+            for (let n = start; n <= end; ++n) {
+              const t = Math.abs(n - row) / radius;
+              const weight = t >= 1 ? 0 : (1 - t * t) * (1 - t * t);
+              if (weight) level.roadSegments[n] = level.roadSegments[n].map(v => v + Math.round(delta * weight));
+            }
+            dragging.x += delta;
+          }
+        }
+        dragging.x = dragging.type === "road" ? dragging.x : p.x;
+        dragging.y = p.y;
+        refresh(); draw();
+      };
+      const pointerUp = () => {
+        if (dragging && dragging.modified && dragging.type !== "pan") changed("Änderung vorgenommen.");
+        dragging = null;
+      };
+      const setToolButtons = () => {
+        document.querySelector("#select-tool").classList.toggle("active", mode === "select");
+        document.querySelector("#add-object-tool").classList.toggle("active", mode === "object");
+        document.querySelector("#add-up-tool").classList.toggle("active", mode === "trackUp");
+        document.querySelector("#add-down-tool").classList.toggle("active", mode === "trackDown");
+      };
+      const setMode = value => { mode = value; setToolButtons(); };
+      document.querySelector("#file-input").addEventListener("change", async event => {
+        const file = event.target.files[0];
+        if (!file) return;
+        try { loadLevel(JSON.parse(await file.text()), file.name); }
+        catch (error) { setStatus(`Laden fehlgeschlagen: ${error.message}`); }
+        event.target.value = "";
+      });
+      document.querySelector("#texture-input").addEventListener("change", async event => {
+        try { await loadTextureDirectory(event.target.files); }
+        catch (error) { setStatus(`Texturen konnten nicht geladen werden: ${error.message}`); }
+        event.target.value = "";
+      });
+      document.querySelector("#sprite-input").addEventListener("change", async event => {
+        try { await loadSpriteDirectory(event.target.files); }
+        catch (error) { setStatus(`Objektsprites konnten nicht geladen werden: ${error.message}`); }
+        event.target.value = "";
+      });
+      document.querySelector("#save-button").addEventListener("click", () => {
+        if (!level) return;
+        const blob = new Blob([JSON.stringify(level, null, 2) + "\n"], { type: "application/json" });
+        const url = URL.createObjectURL(blob), a = document.createElement("a");
+        a.href = url; a.download = `level-${String(level.level).padStart(2, "0")}-edited.json`;
+        a.click(); URL.revokeObjectURL(url);
+        dirty = false; refresh(); setStatus("JSON-Datei heruntergeladen.");
+      });
+      document.querySelector("#undo-button").addEventListener("click", undo);
+      document.querySelector("#fit-button").addEventListener("click", fit);
+      document.querySelector("#map-view").addEventListener("click", () => {
+        viewMode = "map";
+        viewport.classList.remove("game-view");
+        document.querySelector("#map-tools").hidden = false;
+        document.querySelector("#brush-control").hidden = false;
+        document.querySelector("#drive-controls").hidden = true;
+        document.querySelector("#map-hint").textContent =
+          "Mausrad: Zoom · Mittlere Maustaste: Verschieben · Ziehen: Objekt, KI-Punkt oder Straße bearbeiten";
+        document.querySelector("#map-view").classList.add("active");
+        document.querySelector("#drive-view").classList.remove("active");
+        fit();
+      });
+      document.querySelector("#drive-view").addEventListener("click", () => {
+        if (!level) return;
+        viewMode = "drive";
+        viewport.classList.add("game-view");
+        document.querySelector("#map-tools").hidden = true;
+        document.querySelector("#brush-control").hidden = true;
+        document.querySelector("#drive-controls").hidden = false;
+        document.querySelector("#map-hint").textContent =
+          "Spielnahe Straßenprojektion · Position, Kamera-X und Geschwindigkeit unten einstellen";
+        document.querySelector("#drive-view").classList.add("active");
+        document.querySelector("#map-view").classList.remove("active");
+        loadCurrentTextures().catch(error => setStatus(`Texturen: ${error.message}`));
+        draw();
+      });
+      document.querySelector("#camera-y").addEventListener("input", draw);
+      document.querySelector("#camera-x-offset").addEventListener("input", draw);
+      document.querySelector("#camera-speed").addEventListener("input", draw);
+      document.querySelector("#select-tool").addEventListener("click", () => setMode("select"));
+      document.querySelector("#add-object-tool").addEventListener("click", () => setMode("object"));
+      document.querySelector("#add-up-tool").addEventListener("click", () => setMode("trackUp"));
+      document.querySelector("#add-down-tool").addEventListener("click", () => setMode("trackDown"));
+      document.querySelectorAll("[data-road-info]").forEach(input => input.addEventListener("change", () => {
+        if (!level) return;
+        const value = Number(input.value);
+        if (!Number.isFinite(value)) return;
+        checkpoint(); level.roadInfo[input.dataset.roadInfo] = value; changed("Oberflächenwert geändert.");
+        if (input.dataset.roadInfo.includes("TextureId"))
+          loadCurrentTextures().catch(error => setStatus(`Texturen: ${error.message}`));
+      }));
+      [
+        ["#level-name", (v) => level.name = v, true],
+        ["#level-number", (v) => level.level = Math.round(v)],
+        ["#level-time", (v) => level.metadata.time = Math.round(v)],
+        ["#start-x", (v) => level.metadata.startX = Math.round(v)],
+        ["#level-end", (v) => level.metadata.levelEnd = Math.round(v)],
+        ["#road-info-id", (v) => level.metadata.roadInfoId = Math.round(v)]
+      ].forEach(([selector, setter, text]) => document.querySelector(selector).addEventListener("change", event => {
+        if (!level) return;
+        const value = text ? event.target.value : Number(event.target.value);
+        if (!text && !Number.isFinite(value)) return;
+        checkpoint(); setter(value); changed("Level-Eigenschaft geändert.");
+      }));
+      canvas.addEventListener("pointerdown", pointerDown);
+      canvas.addEventListener("pointermove", pointerMove);
+      canvas.addEventListener("pointerup", pointerUp);
+      canvas.addEventListener("pointercancel", pointerUp);
+      canvas.addEventListener("contextmenu", event => event.preventDefault());
+      canvas.addEventListener("wheel", event => {
+        if (!level || viewMode !== "map") return;
+        event.preventDefault();
+        const pos = canvasPos(event), before = world(pos.x, pos.y);
+        const factor = event.deltaY < 0 ? 1.15 : 1 / 1.15;
+        transform.scale = Math.max(0.0001, Math.min(5, transform.scale * factor));
+        const after = screen(before.x, before.y);
+        transform.x += pos.x - after.x; transform.y += pos.y - after.y;
+        draw();
+      }, { passive: false });
+      new ResizeObserver(resize).observe(viewport);
+      enabled(false);
+      draw();
+    })();
+  </script>
+</body>
+</html>

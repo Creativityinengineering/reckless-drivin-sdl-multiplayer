@@ -367,7 +367,7 @@ void SetCarSound(float engine, float skidL, float skidR, float velo)
     float engineVol, gearVelo;
 
     if (!(*gRoadInfo).water) {
-        float highestGear = (gPlayerAddOns & kAddOnTurbo)
+        float highestGear = (gCurPlayer->addOns & kAddOnTurbo)
                             ? kHighestGearTurbo : kHighestGear;
         while (velo > (gGear + 1) * highestGear / kNumGears + kShiftTolerance
                && (gGear + 1) < kNumGears)

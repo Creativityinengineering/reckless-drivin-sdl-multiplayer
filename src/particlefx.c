@@ -70,7 +70,7 @@ void DrawParticleFXZoomed(float xDrawStart,float yDrawStart,float zoom,int layer
 						int x=(pos.x-xDrawStart)*invZoom,y=(yDrawStart-pos.y)*invZoom;
 						if(x>0&&y>0)
 							if(x<gXSize&&y<gYSize)
-								*((UInt16*)(gBaseAddr+y*gRowBytes+x*2))=fx->color16;
+								((tPixel*)(gBaseAddr+y*gRowBytes))[x]=Pixel555(fx->color16);
 					}
 				else
 					for(i=0;i<numDrawParticles;i++)

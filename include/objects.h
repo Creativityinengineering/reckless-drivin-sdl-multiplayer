@@ -88,6 +88,14 @@ typedef struct{
 } tObjectType;
 typedef tObjectType *tObjectTypePtr;
 
+/* LAN: one received state of an object, stamped with the sender's clock. */
+typedef struct{
+	t2DPoint pos,velo;
+	float dir;
+	UInt32 time;
+}tNetSample;
+#define kNetSamples 4
+
 typedef struct{
 	void *next,*prev;
 	t2DPoint pos;
@@ -108,6 +116,28 @@ typedef struct{
 	tObjectTypePtr type;
 	void *shooter;
 	tInputData input;
+	/* extended mode */
+	UInt32 overtakeUntil;	/* frame until which traffic pulls out to overtake */
+	void *chaseTarget;		/* cop swarm: the driver this cop hunts */
+	UInt32 panicUntil;		/* rammed by a driver: flees until this frame */
+	UInt32 recklessUntil;	/* shaken by a crash: drives recklessly until this frame */
+	SInt8 overtakeSide;		/* 1 = pass on the usual side, -1 = the other side */
+	SInt8 panicTurn;		/* panicking car turning round: steering side, 0 = no */
+	float panicTurnDir;		/* heading at which the turn is complete */
+	/* LAN: the host simulates the world and sends it to the clients */
+	SInt16 typeRes;			/* resource id of type */
+	UInt16 netId;			/* identifies the object between computers */
+	UInt8 netLocal;			/* never sent: effects, the drivers' own weapons */
+	UInt8 replica;			/* client: a copy of a host object */
+	UInt32 netSeenMS;		/* replica: arrival of its last state */
+	tNetSample netSamples[kNetSamples];	/* replica: recent states from the host */
+	UInt8 netSampleHead,netSampleCount;
+	int netBaseFrame;		/* undamaged frame the dents were made from */
+	float netDamage;		/* damage the dents were made for */
+	UInt8 dentAmount[9];	/* depth of the dent per damage flag bit, *12 */
+	UInt32 rageUntil;		/* rammed by a driver: chases him until this frame */
+	UInt32 warUntil;		/* car war crate: rams warTargetId until this frame */
+	UInt16 warTargetId;
 } tObject;
 
 enum{
@@ -133,30 +163,32 @@ enum{
 
 extern tTrackSeg gTracks[kMaxTracks];
 extern int gTrackCount;
-extern tObject *gFirstObj,*gCameraObj,*gPlayerObj,*gSpikeObj,*gBrakeObj,*gFirstVisObj,*gLastVisObj;
-extern int gPlayerLives,gExtraLives;
-extern float gPlayerDeathDelay,gFinishDelay;
-extern int gPlayerScore,gDisplayScore;
-extern int gPlayerBonus;
-extern UInt32 gPlayerAddOns;
+extern tObject *gFirstObj,*gCameraObj,*gPlayerObj,*gFirstVisObj,*gLastVisObj;
 extern float gGameTime;
 extern tObject *gHeliObj;
 extern unsigned long gFrameCount,gGraphFrameCount;
-extern float gPlayerSlide[4];
-extern int gNumMissiles,gNumMines;
-extern float gXDriftPos,gYDriftPos,gXFrontDriftPos,gYFrontDriftPos,gZoomVelo;
-extern float gSpikeFrame;
+extern float gXDriftPos,gYDriftPos,gXFrontDriftPos,gYFrontDriftPos;
+extern int gNoKillScore;
 
 void MoveObjects();
+int DamageLookFrame(tObject *theObj,int frame,int damagePos,float amount);
+void NitroFlame(tObject *car);
+void BonusObject(tObject *theObj);
+tObject *FindObjectByNetId(UInt16 netId);
+void GetVisObjs(void);
 void FlushDeferredFrees(void);
 tObject *NewObject(tObject *,SInt16);
 void RemoveObject(tObject *);
 void InsertObjectGroup(tObjectGroupReference);
+t2DPoint GetUniquePosLimited(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir,
+	int maxTries,int *found);
 void KillObject(tObject *);
 int CalcBackCollision(t2DPoint);
 void SortObjects();
 void FireWeapon(tObject *shooter,int weaponID);
 void SwapAllObjectTypes(void);
 void SwapAllObjectGroups(void);
+
+#include "player.h"
 
 #endif

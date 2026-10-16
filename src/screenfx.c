@@ -37,12 +37,17 @@ void ShiftInPicture()
 	PauseFrameCount();
 
 	int rowBytes;
-	UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
-	int fbStride = rowBytes / 2;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	int fbStride = rowBytes/4;
 
 	/* Save the incoming frame (the game has already rendered into the fb) */
-	static UInt16 incoming[SCREEN_WIDTH * SCREEN_HEIGHT];
-	memcpy(incoming, fb, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(UInt16));
+	int renderWidth = Platform_GetRenderWidth();
+	int renderHeight = Platform_GetRenderHeight();
+	static tPixel incoming[SCREEN_WIDTH * PLATFORM_MAX_RENDER_SCALE *
+		SCREEN_HEIGHT * PLATFORM_MAX_RENDER_SCALE];
+	for (int y = 0; y < renderHeight; y++)
+		memcpy(incoming + y * renderWidth, fb + y * fbStride,
+			(size_t)renderWidth * sizeof(tPixel));
 
 	UInt64 startTime = GetMSTime();
 	float elapsed;
@@ -54,10 +59,10 @@ void ShiftInPicture()
 		if (per > 1.0f) per = 1.0f;
 
 		/* Clear framebuffer to black */
-		memset(fb, 0, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(UInt16));
+		memset(fb, 0, (size_t)fbStride * renderHeight * sizeof(tPixel));
 
-		for (int y = 0; y < SCREEN_HEIGHT; y++) {
-			float relY = (float)y / (float)SCREEN_HEIGHT;
+		for (int y = 0; y < renderHeight; y++) {
+			float relY = (float)y / (float)renderHeight;
 			float denom1 = relY + 1.0f;
 			float denom2 = relY * relY + 2.0f * relY + 1.0f; /* (relY+1)^2 */
 			float f = 4.0f / denom2 - 4.0f / denom1 - 1.0f;
@@ -65,19 +70,19 @@ void ShiftInPicture()
 			int offset;
 			if (y & 1) {
 				/* Odd rows: slide from left */
-				offset = (int)(-f * (1.0f - per) * SCREEN_WIDTH);
+				offset = (int)(-f * (1.0f - per) * renderWidth);
 			} else {
 				/* Even rows: slide from right */
-				offset = (int)(f * (1.0f - per) * SCREEN_WIDTH);
+				offset = (int)(f * (1.0f - per) * renderWidth);
 			}
 
 			/* Copy the row from the incoming buffer with the offset */
-			UInt16 *dstRow = fb + y * fbStride;
-			UInt16 *srcRow = incoming + y * SCREEN_WIDTH;
+			tPixel *dstRow = fb + y * fbStride;
+			tPixel *srcRow = incoming + y * renderWidth;
 
-			for (int x = 0; x < SCREEN_WIDTH; x++) {
+			for (int x = 0; x < renderWidth; x++) {
 				int sx = x - offset;
-				if (sx >= 0 && sx < SCREEN_WIDTH)
+				if (sx >= 0 && sx < renderWidth)
 					dstRow[x] = srcRow[sx];
 			}
 		}
@@ -91,7 +96,9 @@ void ShiftInPicture()
 	} while (elapsed < kShiftInDuration);
 
 	/* Ensure the final frame is clean */
-	memcpy(fb, incoming, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(UInt16));
+	for (int y = 0; y < renderHeight; y++)
+		memcpy(fb + y * fbStride, incoming + y * renderWidth,
+			(size_t)renderWidth * sizeof(tPixel));
 	Platform_Blit2Screen();
 
 	ResumeFrameCount();
@@ -115,16 +122,15 @@ void GameOverAnim()
 		float size,xPos,yPos,dir;
 		msTime-=animStart;
 		t=msTime/1000000.0;
+		size=t*t*Platform_GetRenderScale();
 		switch(type)
 		{
 			case kSpinIn:
-				size=t*t;
 				xPos=gXSize/2;
 				yPos=gYSize/2;
 				dir=(side?1:-1)*2*PI*t;
 				break;
 			case kFlyIn:
-				size=t*t;
 				xPos=gXSize/2;
 				if(side)
 					yPos=(gYSize/2)*(4.0/3.0)*(1.0/(-t-1.0)+1.0);
@@ -133,7 +139,6 @@ void GameOverAnim()
 				dir=0;
 				break;
 			default:
-				size=t*t;
 				xPos=gXSize/2;
 				yPos=gYSize/2;
 				dir=0;

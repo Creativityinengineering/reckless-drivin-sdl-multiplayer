@@ -12,14 +12,14 @@
 void ShowHighScores(int hilite)
 {
 	int i, rowBytes;
-	UInt16 *fb;
+	tPixel *fb;
 	int fbStride;
 
 	/* Show the high scores background picture */
 	ShowPicScreen(1004);
 
 	fb = Platform_GetFramebuffer(&rowBytes);
-	fbStride = rowBytes / 2;
+	fbStride = rowBytes/4;
 
 	/* Title */
 	TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 120, "HIGH SCORES", COL_WHITE, 3);
@@ -70,8 +70,8 @@ extern int gOSX;
 void SetHighScoreEntry(int index, UInt32 score)
 {
 	int rowBytes;
-	UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
-	int fbStride = rowBytes / 2;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	int fbStride = rowBytes/4;
 	char inputBuf[16];
 	int inputLen = 0;
 	int done = 0;
@@ -87,9 +87,14 @@ void SetHighScoreEntry(int index, UInt32 score)
 	/* Cache the background once to avoid re-decoding (and double-presenting) each frame */
 	ShowPicScreen(1004);
 	fb = Platform_GetFramebuffer(&rowBytes);
-	fbStride = rowBytes / 2;
-	UInt16 bgCache[SCREEN_WIDTH * SCREEN_HEIGHT];
-	memcpy(bgCache, fb, sizeof(bgCache));
+	fbStride = rowBytes/4;
+	static tPixel bgCache[SCREEN_WIDTH * PLATFORM_MAX_RENDER_SCALE *
+		SCREEN_HEIGHT * PLATFORM_MAX_RENDER_SCALE];
+	int renderWidth = Platform_GetRenderWidth();
+	int renderHeight = Platform_GetRenderHeight();
+	for (int y = 0; y < renderHeight; y++)
+		memcpy(bgCache + y * renderWidth, fb + y * fbStride,
+			(size_t)renderWidth * sizeof(tPixel));
 
 	Platform_ShowCursor();
 	Platform_FlushInput();
@@ -130,7 +135,9 @@ void SetHighScoreEntry(int index, UInt32 score)
 		}
 
 		/* Restore cached background (no present) */
-		memcpy(fb, bgCache, sizeof(bgCache));
+		for (int y = 0; y < renderHeight; y++)
+			memcpy(fb + y * fbStride, bgCache + y * renderWidth,
+				(size_t)renderWidth * sizeof(tPixel));
 
 		TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 140, "NEW HIGH SCORE!", COL_YELLOW, 3);
 
@@ -184,7 +191,7 @@ void SetHighScoreEntry(int index, UInt32 score)
 	memcpy(gPrefs.lastName + 1, inputBuf, inputLen);
 }
 
-void CheckHighScore(UInt32 score)
+static void CheckHighScoreInternal(UInt32 score, int showTable)
 {
 	int i;
 	if(gLevelResFile)return;
@@ -195,8 +202,80 @@ void CheckHighScore(UInt32 score)
 		SimplePlaySound(153);
 		SetHighScoreEntry(i,score);
 		WritePrefs(false);
-		ShowHighScores(i);
+		if(showTable)
+			ShowHighScores(i);
 	}
+}
+
+void CheckHighScore(UInt32 score)
+{
+	CheckHighScoreInternal(score, 1);
+}
+
+void CheckHighScoreWithoutDisplay(UInt32 score)
+{
+	CheckHighScoreInternal(score, 0);
+}
+
+int CheckHighScoreForPlayer(UInt32 score, const char *name)
+{
+	int i, previousRank = 0;
+	UInt32 previousScore = 0;
+	size_t nameLength;
+	if (gLevelResFile || !name || score == 0)
+		return 0;
+	for (i = 0; i < kNumHighScoreEntrys; i++) {
+		char entryName[16];
+		TR_PStrToC(gPrefs.high[i].name, entryName, sizeof(entryName));
+		if (strcmp(entryName, name) == 0 && gPrefs.high[i].score > previousScore) {
+			previousScore = gPrefs.high[i].score;
+			previousRank = i + 1;
+		}
+	}
+	if (score <= previousScore)
+		return previousRank;
+	for (i = 0; i < kNumHighScoreEntrys; ) {
+		char entryName[16];
+		TR_PStrToC(gPrefs.high[i].name, entryName, sizeof(entryName));
+		if (strcmp(entryName, name) == 0) {
+			BlockMoveData(gPrefs.high + i + 1, gPrefs.high + i,
+				sizeof(tScoreRecord) * (kNumHighScoreEntrys - i - 1));
+			memset(gPrefs.high + kNumHighScoreEntrys - 1, 0,
+				sizeof(tScoreRecord));
+		} else {
+			i++;
+		}
+	}
+	for (i = kNumHighScoreEntrys; i > 0 && score > gPrefs.high[i - 1].score; i--)
+		;
+	if (i == kNumHighScoreEntrys)
+		return 0;
+	BlockMoveData(gPrefs.high + i, gPrefs.high + i + 1,
+		sizeof(tScoreRecord) * (kNumHighScoreEntrys - i - 1));
+	nameLength = strlen(name);
+	if (nameLength > 15)
+		nameLength = 15;
+	gPrefs.high[i].name[0] = (unsigned char)nameLength;
+	memcpy(gPrefs.high[i].name + 1, name, nameLength);
+	gPrefs.high[i].score = score;
+	gPrefs.high[i].time = 0;
+	SimplePlaySound(153);
+	WritePrefs(false);
+	return i + 1;
+}
+
+int GetHighScoreRank(const char *name)
+{
+	int i;
+	char entryName[16];
+	if (!name)
+		return 0;
+	for (i = 0; i < kNumHighScoreEntrys; i++) {
+		TR_PStrToC(gPrefs.high[i].name, entryName, sizeof(entryName));
+		if (strcmp(entryName, name) == 0)
+			return i + 1;
+	}
+	return 0;
 }
 
 void ClearHighScores()

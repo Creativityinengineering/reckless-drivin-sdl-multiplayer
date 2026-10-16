@@ -10,6 +10,7 @@
 #include "particlefx.h"
 #include "objectcontrol.h"
 #include "random.h"
+#include "netgame.h"
 
 #define kMechResistance		100
 #define kMinSteerTime		0.8		//minimum time (in seconds) for the steering wheel to go to maximum steering.
@@ -24,6 +25,9 @@
 #define kSlideFactor		0.5	//determines how much control one has over the car when it is sliding (0=no difference/1= 'no control')
 #define kMotorRunTime		0.3		//time in seconds for motor to reach maximum acceleration.
 #define kTrackIntensity		0.075	//Intensity of rubber Tracks left by cars.
+#define kSuperGrip			1.8		//road friction factor of the super grip crate
+#define kRainGrip			0.55	//road friction under someone else's rain crate
+#define kNitroPower			2.5		//engine power factor of the nitro crate
 
 void HandleCollision(tObject *);
 
@@ -144,8 +148,15 @@ float CalcPower(tObject *theObj,float velo)
 	if(gRoadInfo->water&&theObj->input.brake)
 		throttle=-theObj->input.brake*(signedVelo>0?30:-30);	
 	power=signedVelo>-30?throttle*(*objType).maxEngineForce:0;
-	if(theObj==gPlayerObj)
-		power*=(gPlayerAddOns&kAddOnTurbo&&gRoadInfo->friction>=100?1.7:1);
+	if(theObj==gPlayerObj||Network_IsLocalPlayer2(theObj))
+	{
+		power*=(gCurPlayer->addOns&kAddOnTurbo&&gRoadInfo->friction>=100?1.7:1);
+		if(gCurPlayer->nitroTime>0&&!gRoadInfo->water)
+			power*=kNitroPower;
+	}
+	else if(theObj->control==kObjectCopControl&&
+		(Network_HasAggressiveCops()||!(objType->flags&kObjectCop)))	/* zombies too */
+		power*=1.6;	/* hunting cops catch up */
 	if(theObj->input.throttle>theObj->throttle)
 	{
 		theObj->throttle+=kFrameDuration/kMotorRunTime;
@@ -181,7 +192,8 @@ void ControlWheelObjectPlayer(tObject *theObj)
 	float sinDir=sin(theObj->dir);
 	t2DPoint objDir=P2D(sinDir,cosDir);
 	float velo=VEC2D_Value(theObj->velo);
-	float fRoadFriction=(*objType).mass*(*objType).friction*(*gRoadInfo).friction;
+	float fRoadFriction=(*objType).mass*(*objType).friction*(*gRoadInfo).friction*
+		(gCurPlayer->gripTime>0?kSuperGrip:1)*(Network_RainHits(theObj)?kRainGrip:1);
 	float power=CalcPower(theObj,velo);
 	float rotMass=(*objType).length*(*objType).length*(*objType).mass;
 	float slide[4]={0,0,0,0};
@@ -191,7 +203,7 @@ void ControlWheelObjectPlayer(tObject *theObj)
 	t2DPoint pTotalFrontLeft=VEC2D_Sum(VEC2D_Scale(pFrontLeft,kScale),theObj->pos);
 	t2DPoint fFrontLeft=CalcWheelForcePlayer(theObj->dir+((*objType).flags2&kObjectRearSteer?0:theObj->steering)
 			,((*objType).flags2&kObjectRearDrive?0:power)
-			,fRoadFriction*SlideFriction(gPlayerSlide[0]),(*objType).mass,velo,vFrontLeft,theObj,&slide[0],theObj->input.brake);
+			,fRoadFriction*SlideFriction(gCurPlayer->slide[0]),(*objType).mass,velo,vFrontLeft,theObj,&slide[0],theObj->input.brake);
 	float mFrontLeft=VEC2D_CrossProduct(fFrontLeft,pFrontLeft);
 
 	t2DPoint pFrontRight=P2D(sinDir*(*objType).wheelLength+cosDir*(*objType).wheelWidth,cosDir*(*objType).wheelLength-sinDir*(*objType).wheelWidth);
@@ -199,7 +211,7 @@ void ControlWheelObjectPlayer(tObject *theObj)
 	t2DPoint pTotalFrontRight=VEC2D_Sum(VEC2D_Scale(pFrontRight,kScale),theObj->pos);
 	t2DPoint fFrontRight=CalcWheelForcePlayer(theObj->dir+((*objType).flags2&kObjectRearSteer?0:theObj->steering)
 			,((*objType).flags2&kObjectRearDrive?0:power)
-			,fRoadFriction*SlideFriction(gPlayerSlide[1]),(*objType).mass,velo,vFrontRight,theObj,&slide[1],theObj->input.brake);
+			,fRoadFriction*SlideFriction(gCurPlayer->slide[1]),(*objType).mass,velo,vFrontRight,theObj,&slide[1],theObj->input.brake);
 	float mFrontRight=VEC2D_CrossProduct(fFrontRight,pFrontRight);
 
 	t2DPoint pRearLeft=P2D(-sinDir*(*objType).wheelLength-cosDir*(*objType).wheelWidth,-cosDir*(*objType).wheelLength+sinDir*(*objType).wheelWidth);
@@ -207,7 +219,7 @@ void ControlWheelObjectPlayer(tObject *theObj)
 	t2DPoint pTotalRearLeft=VEC2D_Sum(VEC2D_Scale(pRearLeft,kScale),theObj->pos);
 	t2DPoint fRearLeft=CalcWheelForcePlayer(theObj->dir-((*objType).flags2&kObjectRearSteer?theObj->steering:0)
 			,((*objType).flags2&kObjectRearDrive?power:0)
-			,fRoadFriction*SlideFriction(gPlayerSlide[2]),(*objType).mass,velo,vRearLeft,theObj,&slide[2],theObj->input.handbrake+0.8*theObj->input.brake);
+			,fRoadFriction*SlideFriction(gCurPlayer->slide[2]),(*objType).mass,velo,vRearLeft,theObj,&slide[2],theObj->input.handbrake+0.8*theObj->input.brake);
 	float mRearLeft=VEC2D_CrossProduct(fRearLeft,pRearLeft);
 
 	t2DPoint pRearRight=P2D(-sinDir*(*objType).wheelLength+cosDir*(*objType).wheelWidth,-cosDir*(*objType).wheelLength-sinDir*(*objType).wheelWidth);
@@ -215,7 +227,7 @@ void ControlWheelObjectPlayer(tObject *theObj)
 	t2DPoint pTotalRearRight=VEC2D_Sum(VEC2D_Scale(pRearRight,kScale),theObj->pos);
 	t2DPoint fRearRight=CalcWheelForcePlayer(theObj->dir-((*objType).flags2&kObjectRearSteer?theObj->steering:0)
 			,((*objType).flags2&kObjectRearDrive?power:0)
-			,fRoadFriction*SlideFriction(gPlayerSlide[3]),(*objType).mass,velo,vRearRight,theObj,&slide[3],theObj->input.handbrake+0.8*theObj->input.brake);
+			,fRoadFriction*SlideFriction(gCurPlayer->slide[3]),(*objType).mass,velo,vRearRight,theObj,&slide[3],theObj->input.handbrake+0.8*theObj->input.brake);
 	float mRearRight=VEC2D_CrossProduct(fRearRight,pRearRight);
 	
 	t2DPoint aTotal=VEC2D_Scale(VEC2D_Sum(VEC2D_Sum(VEC2D_Sum(fFrontLeft,fFrontRight),fRearLeft),fRearRight),0.25/(*objType).mass*kFrameDuration);
@@ -244,10 +256,10 @@ void ControlWheelObjectPlayer(tObject *theObj)
 	theObj->velo=VEC2D_Sum(aTotal,theObj->velo);
 	theObj->rotVelo+=aRotTotal;
 	theObj->slide=(slide[0]+slide[1]+slide[2]+slide[3])/4;
-	gPlayerSlide[0]=slide[0];
-	gPlayerSlide[1]=slide[1];
-	gPlayerSlide[2]=slide[2];
-	gPlayerSlide[3]=slide[3];
+	gCurPlayer->slide[0]=slide[0];
+	gCurPlayer->slide[1]=slide[1];
+	gCurPlayer->slide[2]=slide[2];
+	gCurPlayer->slide[3]=slide[3];
 	CalcSteeringPlayer(theObj,velo);
 }
 
@@ -360,8 +372,22 @@ void MakeSmoke(tObject *theObj)
 	tObject *smokeObj=NewObject(theObj,195);
 	tObjectTypePtr objType=theObj->type;
 	if(!smokeObj) return;
+	smokeObj->netLocal=1;
 	smokeObj->pos=VEC2D_Sum(theObj->pos,P2D(sin(theObj->dir)*(*objType).length*kScale,cos(theObj->dir)*(*objType).length*kScale));
 	smokeObj->pos=VEC2D_Sum(smokeObj->pos,P2D(RanFl(-10,10),RanFl(-10,10)));
+}
+
+/* Nitro crate: a burst of fire behind the car. */
+void NitroFlame(tObject *car)
+{
+	t2DPoint back=P2D(-sin(car->dir),-cos(car->dir));
+	tObject *flame=NewObject(car,1001);
+	if(!flame) return;
+	flame->netLocal=1;
+	flame->pos=VEC2D_Sum(car->pos,VEC2D_Scale(back,(*car->type).length*kScale+6));
+	flame->pos=VEC2D_Sum(flame->pos,P2D(RanFl(-4,4),RanFl(-4,4)));
+	flame->velo=VEC2D_Sum(VEC2D_Scale(car->velo,0.6),VEC2D_Scale(back,12));
+	flame->dir=RanFl(0,2*PI);
 }
 
 void BurnObj(tObject *theObj)
@@ -370,6 +396,7 @@ void BurnObj(tObject *theObj)
 	float l=(*theObj->type).length*kScale;
 	expObj=NewObject(theObj,1001);
 	if(!expObj) return;
+	expObj->netLocal=1;
 	expObj->frameDuration=RanFl(0,4);
 	expObj->frame=0;
 	expObj->pos.x=theObj->pos.x+RanFl(0,l);
@@ -385,7 +412,7 @@ void ObjectPhysics(tObject *theObj)
 	if(!theObj->jumpHeight||theObj->type->flags&kObjectHeliFlag)
 	{
 		if(theObj->type->flags&kObjectWheelFlag)
-			if(fabs(theObj->pos.y-gCameraObj->pos.y)<10*kVisDist){
+			if(Network_NearestDriverDistance(theObj->pos.y)<10*kVisDist){
 					if(theObj==gPlayerObj)
 						ControlWheelObjectPlayer(theObj);
 					else if(CheckObjectMotion(theObj))
@@ -399,10 +426,12 @@ void ObjectPhysics(tObject *theObj)
 		if(theObj->type->flags2&kObjectMissile){
 			if(theObj->jumpHeight==0&&theObj->jumpVelo==0)
 				KillObject(theObj);}
-		else if(fabs(theObj->pos.y-gCameraObj->pos.y)<kVisDist)
+		else if(Network_NearestDriverDistance(theObj->pos.y)<kVisDist)
 		{
 			if(theObj->type->flags&kObjectBackCollFlag||theObj->type->flags2&kObjectSink&&(*gRoadInfo).deathOffs){
-				if(CalcBackCollision(theObj->pos)==2)
+				/* Offroad tyres crate: off the road is no crash for a while. */
+				if(CalcBackCollision(theObj->pos)==2&&
+					!(theObj==gPlayerObj&&gCurPlayer->offroadTime>0&&!(*gRoadInfo).water))
 					KillObject(theObj);}
 			else if(theObj->type->flags2&kObjectFrontCollFlag){
 				if(CalcBackCollision(theObj->pos)==0)
@@ -410,26 +439,32 @@ void ObjectPhysics(tObject *theObj)
 			if(theObj->type->flags&kObjectBounce)
 				HandleCollision(theObj);
 			if(theObj->type->flags&kObjectCop&&theObj!=gPlayerObj)
-				if(!(gPlayerAddOns&kAddOnCop)&&!gFinishDelay&&!gPlayerDeathDelay)
+			{
+				tObject *policeTarget=Network_GetPoliceTarget(theObj);
+				if(policeTarget&&!(Network_GetPlayerAddOns(policeTarget)&kAddOnCop)&&
+					!Network_DriverIsFinished(policeTarget)&&
+					!Network_GetPlayerDeathDelay(policeTarget))
 				{
 					t2DPoint dirVec=P2D(sin(theObj->dir),cos(theObj->dir));
-					t2DPoint normDiffVec=VEC2D_Norm(VEC2D_Difference(gPlayerObj->pos,theObj->pos));
+					t2DPoint normDiffVec=VEC2D_Norm(VEC2D_Difference(policeTarget->pos,theObj->pos));
 					if(theObj->control==kObjectDriveUp||theObj->control==kObjectNoInput)
 						theObj->control=kObjectCopControl;
 					else if(theObj->control==kObjectDriveDown)
 					{
-						if(gPlayerObj->pos.y>theObj->pos.y+kStartChaseDist*kScale)
-							ObjectStartChase(theObj,kStartChaseDist*kScale,kStartChaseSpeed);			
+						/* Turn round behind the driver this cop is after. */
+						if(policeTarget->pos.y>theObj->pos.y+kStartChaseDist*kScale)
+							ObjectStartChaseBehind(theObj,policeTarget,kStartChaseDist*kScale,kStartChaseSpeed);
 					}
 					else if(theObj->control==kObjectCopControl)
 						if(theObj->type->weaponObj)
 							if(VEC2D_DotProduct(dirVec,normDiffVec)>0.9)
-								if(VEC2D_Value(VEC2D_Difference(gPlayerObj->pos,theObj->pos))>70)
+								if(VEC2D_Value(VEC2D_Difference(policeTarget->pos,theObj->pos))>70)
 									if(RanProb(1.0/theObj->type->weaponInfo))
 										FireWeapon(theObj,theObj->type->weaponObj);
 				}
+			}
 			if(theObj->type->flags2&kObjectDamageble){
-				if(theObj->damage*2>theObj->type->maxDamage&&fabs(theObj->pos.y-gCameraObj->pos.y)<kVisDist)
+				if(theObj->damage*2>theObj->type->maxDamage&&Network_NearestDriverDistance(theObj->pos.y)<kVisDist)
 					if(RanProb(0.25))
 						MakeSmoke(theObj);
 				if(theObj->damage>theObj->type->maxDamage)

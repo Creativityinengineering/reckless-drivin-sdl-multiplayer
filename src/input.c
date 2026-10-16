@@ -11,6 +11,7 @@
 
 #include "compat.h"
 #include "input.h"
+#include "netgame.h"
 #include "platform.h"
 #include "objects.h"
 #include "screen.h"
@@ -31,6 +32,7 @@
 tInputData    gInputData;
 int           gFire, gMissile;
 unsigned long gSwitchDelayStart;
+static int sLocalElementPrevState[kLocalPlayerCount][kNumElements];
 
 /* ======================================================================== */
 /* Init / Mode                                                               */
@@ -61,11 +63,30 @@ void InputMode(int mode)
 
 int GetElement(int element)
 {
+    int player = Network_GetLocalDriverSlot(gPlayerObj);
+    if (player >= 0 && element >= 0 && element < kLocalBindableCount) {
+        SDL_Scancode key = (SDL_Scancode)gPrefs.localKeyCodes[player][element];
+        return Platform_IsKeyDown(key);
+    }
     return Platform_GetElement(element);
 }
 
 int GetEvent(int *element, int *data)
 {
+    int player = Network_GetLocalDriverSlot(gPlayerObj);
+    if (player >= 0) {
+        int current;
+        for (int i = 0; i < kNumElements; ++i) {
+            current = GetElement(i);
+            if (current != sLocalElementPrevState[player][i]) {
+                *element = i;
+                *data = current;
+                sLocalElementPrevState[player][i] = current;
+                return 1;
+            }
+        }
+        return 0;
+    }
     return Platform_GetEvent(element, data);
 }
 
@@ -214,13 +235,15 @@ void Input(tInputData **data)
     while (GetEvent(&element, &eventData)) {
         switch (element) {
         case kForward:
-            if (!playerVelo && gInputData.reverse && eventData) {
+            if (!Network_IsLocalMultiplayer() &&
+                !playerVelo && gInputData.reverse && eventData) {
                 switchRequest = true;
                 gSwitchDelayStart = gFrameCount - kMinSwitchDelay;
             }
             break;
         case kBackward:
-            if (!playerVelo && !gInputData.reverse && eventData) {
+            if (!Network_IsLocalMultiplayer() &&
+                !playerVelo && !gInputData.reverse && eventData) {
                 switchRequest = true;
                 gSwitchDelayStart = gFrameCount - kMinSwitchDelay;
             }
@@ -311,30 +334,31 @@ void ConfigureInput(void)
         "Forward", "Backward", "Left", "Right",
         "Kickdown", "Brake", "Mine", "Missile"
     };
-    #define kNumBindable 8  /* kForward through kMissile */
-    #define kConfigDone  kNumBindable
-
-    int rowBytes;
-    UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
-    int fbStride = rowBytes / 2;
-    int selected = 0;
-    int done = 0;
-    int waiting = 0; /* 1 = waiting for key press to rebind */
+    enum { kNumBindable = kLocalBindableCount, kConfigDone = kNumBindable };
+    int selected = 0, profile = 0, done = 0, waiting = 0, rowBytes;
+    tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+    int fbStride = rowBytes/4;
 
     Platform_ShowCursor();
     Platform_FlushInput();
 
     while (!done) {
+        char title[32];
         Platform_PollEvents();
         if (Platform_ShouldQuit()) { done = 1; break; }
 
-        /* --- Draw --- */
+        if (profile == 0)
+            snprintf(title, sizeof(title), "CONTROLS - SOLO");
+        else
+            snprintf(title, sizeof(title), "CONTROLS - PLAYER %d", profile);
         TR_FillRect(fb, fbStride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_DKGRAY);
-        TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 50, "CONTROLS", COL_WHITE, 3);
+        TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 42, title, COL_WHITE, 2);
+        TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 72,
+            "LEFT/RIGHT: SOLO OR MULTIPLAYER DRIVER", COL_CYAN, 1);
 
-        int baseY = 120;
+        {
+        int baseY = 105;
         int itemH = 34;
-
         for (int i = 0; i <= kConfigDone; i++) {
             int y = baseY + i * itemH;
             UInt16 labelCol = (i == selected) ? COL_YELLOW : COL_WHITE;
@@ -350,7 +374,10 @@ void ConfigureInput(void)
                 if (waiting && i == selected) {
                     TR_DrawString(fb, fbStride, 370, y, "Press a key...", COL_RED, 2);
                 } else {
-                    const char *keyName = SDL_GetScancodeName(Platform_GetElementKey(i));
+                    SDL_Scancode key = profile == 0 ?
+                        Platform_GetElementKey(i) :
+                        (SDL_Scancode)gPrefs.localKeyCodes[profile - 1][i];
+                    const char *keyName = SDL_GetScancodeName(key);
                     if (!keyName || keyName[0] == '\0') keyName = "???";
                     TR_DrawString(fb, fbStride, 370, y,  keyName,
                                   (i == selected) ? COL_GREEN : COL_WHITE, 2);
@@ -358,30 +385,37 @@ void ConfigureInput(void)
             }
         }
 
-        TR_DrawString(fb, fbStride, 130, 430, "Enter: Rebind   Esc: Back", COL_GRAY, 2);
+        }
+        TR_DrawString(fb, fbStride, 130, 420, "Enter: Rebind   Esc: Back", COL_GRAY, 2);
 
         Platform_Blit2Screen();
 
-        /* --- Input --- */
         if (waiting) {
             SDL_Scancode sc = Platform_WaitForKey();
-            /* keyCodes is a byte in prefs; refuse scancodes >= 256 (media/AC
-             * keys) so a saved binding cannot round-trip to a different key. */
             if (sc != SDL_SCANCODE_UNKNOWN && sc < 256) {
-                Platform_SetElementKey(selected, sc);
+                if (profile == 0) {
+                    Platform_SetElementKey(selected, sc);
+                    gPrefs.keyCodes[selected] = (UInt8)sc;
+                } else {
+                    gPrefs.localKeyCodes[profile - 1][selected] = (UInt8)sc;
+                }
             }
             waiting = 0;
             Platform_FlushInput();
             continue;
         }
 
-        /* Navigation accepts OS auto-repeat; activation keys need a fresh
-         * press so the Enter that opened this screen cannot start a rebind. */
         if (Platform_WasKeyTyped(SDL_SCANCODE_UP)) {
             selected = (selected + kConfigDone) % (kConfigDone + 1);
         }
         if (Platform_WasKeyTyped(SDL_SCANCODE_DOWN)) {
             selected = (selected + 1) % (kConfigDone + 1);
+        }
+        if (Platform_WasKeyTyped(SDL_SCANCODE_LEFT)) {
+            profile = (profile + kLocalPlayerCount) % (kLocalPlayerCount + 1);
+        }
+        if (Platform_WasKeyTyped(SDL_SCANCODE_RIGHT)) {
+            profile = (profile + 1) % (kLocalPlayerCount + 1);
         }
         if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
             Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER) ||
@@ -396,10 +430,11 @@ void ConfigureInput(void)
             done = 1;
         }
 
-        /* Mouse click */
         {
             int mx, my;
             if (Platform_GetMouseClick(&mx, &my)) {
+                int baseY = 105;
+                int itemH = 34;
                 for (int i = 0; i <= kConfigDone; i++) {
                     int iy = baseY + i * itemH - 4;
                     if (mx >= 120 && mx < 520 && my >= iy && my < iy + 26) {
@@ -415,7 +450,6 @@ void ConfigureInput(void)
         SDL_Delay(16);
     }
 
-    /* Save key bindings to prefs */
     for (int i = 0; i < kNumBindable; i++)
         gPrefs.keyCodes[i] = (UInt8)Platform_GetElementKey(i);
     WritePrefs(0);

@@ -22,5 +22,9 @@
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <!-- Keep running at full speed in the background: a throttled LAN
+         player would stop sending and drop out of the race. -->
+    <key>NSAppSleepDisabled</key>
+    <true/>
 </dict>
 </plist>

@@ -37,6 +37,16 @@
 #include "interface.h"
 #include "screen.h"
 #include "error.h"
+#include "netgame.h"
+#include "hqassets.h"
+
+#ifndef _WIN32
+#include <execinfo.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 /* ---- Global variables expected by the original game code ---- */
 
@@ -145,9 +155,64 @@ static const char* FindDataFile(const char *argv0)
 }
 
 /* ---- Init: replaces the original Init() ---- */
+#ifndef _WIN32
+static char sCrashLogPath[600];
+
+/* Writes a backtrace to crash.log next to the preferences. Only
+   async-signal-safe calls, then re-raises so the OS report still happens. */
+static void CrashHandler(int sig)
+{
+    void *frames[64];
+    int count = backtrace(frames, 64);
+    int fd = open(sCrashLogPath, O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        const char *name = sig == SIGSEGV ? "SIGSEGV" : sig == SIGBUS ? "SIGBUS" :
+                           sig == SIGABRT ? "SIGABRT" : sig == SIGFPE ? "SIGFPE" : "SIGILL";
+        write(fd, "\n=== crash: ", 12);
+        write(fd, name, strlen(name));
+        write(fd, " ===\n", 5);
+        backtrace_symbols_fd(frames, count, fd);
+        close(fd);
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+/* When started from Finder stderr goes nowhere, so keep the log of the
+   current and the previous run in the preferences folder. */
+static void InstallCrashLog(void)
+{
+    char *prefDir = SDL_GetPrefPath("DarrCoh", "RecklessDrivin");
+    if (!prefDir)
+        return;
+    snprintf(sCrashLogPath, sizeof(sCrashLogPath), "%scrash.log", prefDir);
+    struct stat stderrInfo;
+    /* Finder hands the app /dev/null; a terminal, file or pipe is kept. */
+    if (fstat(STDERR_FILENO, &stderrInfo) != 0 ||
+        (S_ISCHR(stderrInfo.st_mode) && !isatty(STDERR_FILENO))) {
+        char logPath[600], previousPath[600];
+        snprintf(logPath, sizeof(logPath), "%slast-run.log", prefDir);
+        snprintf(previousPath, sizeof(previousPath), "%sprevious-run.log", prefDir);
+        rename(logPath, previousPath);
+        if (freopen(logPath, "w", stderr))
+            setvbuf(stderr, NULL, _IOLBF, 0);
+    }
+    SDL_free(prefDir);
+    signal(SIGSEGV, CrashHandler);
+    signal(SIGBUS, CrashHandler);
+    signal(SIGABRT, CrashHandler);
+    signal(SIGFPE, CrashHandler);
+    signal(SIGILL, CrashHandler);
+}
+#else
+static void InstallCrashLog(void) {}
+#endif
+
 static void Init(const char *argv0)
 {
     const char *dataPath;
+
+    InstallCrashLog();
 
     /* Initialize SDL subsystems */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_TIMER) != 0) {
@@ -176,11 +241,14 @@ static void Init(const char *argv0)
     Platform_InitScreen();
     {
         int rowBytes;
-        UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
+        tPixel *fb = Platform_GetFramebuffer(&rowBytes);
         extern Ptr gBaseAddr;
-        extern short gRowBytes;
+        extern int gRowBytes;
         gBaseAddr = (Ptr)fb;
-        gRowBytes = (short)rowBytes;
+        gRowBytes = rowBytes;
+        extern short gXSize, gYSize;
+        gXSize = (short)Platform_GetRenderWidth();
+        gYSize = (short)Platform_GetRenderHeight();
     }
 
     /* We are not on classic Mac OS X */
@@ -241,6 +309,7 @@ static void Init(const char *argv0)
 /* ---- Exit: replaces the original Exit() ---- */
 static void GameExit(void)
 {
+    Network_Shutdown();
     if (gInitSuccessful) {
         /* Save preferences */
         WritePrefs(false);
@@ -248,6 +317,7 @@ static void GameExit(void)
         /* Clean up game resources */
         DisposeInterface();
         UnloadSprites();
+        HQAssets_Clear();
 
         /* Shut down platform subsystems */
         Platform_ShutdownAudio();
@@ -267,12 +337,59 @@ static void GameExit(void)
 /* ---- Main entry point ---- */
 int main(int argc, char *argv[])
 {
-    (void)argc; /* unused */
+    enum { kNoNetwork, kHostNetwork, kJoinNetwork } networkMode = kNoNetwork;
+    const char *serverAddress = NULL;
+    unsigned short networkPort = 33777;
+    int arg;
+
+    for (arg = 1; arg < argc; ++arg) {
+        if (strcmp(argv[arg], "--host") == 0) {
+            if (networkMode != kNoNetwork) {
+                fprintf(stderr, "Use either --host or --join, not both.\n");
+                return 2;
+            }
+            networkMode = kHostNetwork;
+            if (arg + 1 < argc && argv[arg + 1][0] != '-') {
+                char *end;
+                long port = strtol(argv[++arg], &end, 10);
+                if (*end || port < 1 || port > 65535) {
+                    fprintf(stderr, "Invalid UDP port: %s\n", argv[arg]);
+                    return 2;
+                }
+                networkPort = (unsigned short)port;
+            }
+        } else if (strcmp(argv[arg], "--join") == 0) {
+            if (networkMode != kNoNetwork || arg + 1 >= argc) {
+                fprintf(stderr, "Usage: %s [--host [port] | --join IPv4 [port]]\n", argv[0]);
+                return 2;
+            }
+            networkMode = kJoinNetwork;
+            serverAddress = argv[++arg];
+            if (arg + 1 < argc && argv[arg + 1][0] != '-') {
+                char *end;
+                long port = strtol(argv[++arg], &end, 10);
+                if (*end || port < 1 || port > 65535) {
+                    fprintf(stderr, "Invalid UDP port: %s\n", argv[arg]);
+                    return 2;
+                }
+                networkPort = (unsigned short)port;
+            }
+        } else {
+            fprintf(stderr, "Usage: %s [--host [port] | --join IPv4 [port]]\n", argv[0]);
+            return 2;
+        }
+    }
 
     Init(argv[0]);
 
     if (!gInitSuccessful) {
         fprintf(stderr, "[init] Initialization failed. Exiting.\n");
+        GameExit();
+        return 1;
+    }
+
+    if ((networkMode == kHostNetwork && !Network_InitHost(networkPort)) ||
+        (networkMode == kJoinNetwork && !Network_InitClient(serverAddress, networkPort))) {
         GameExit();
         return 1;
     }
@@ -294,6 +411,7 @@ int main(int argc, char *argv[])
             break;
         }
 
+        Network_Poll();
         if (gGameOn)
             GameFrame();
         else {

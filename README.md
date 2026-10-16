@@ -8,7 +8,7 @@
 [![Linux](https://img.shields.io/github/actions/workflow/status/DarrCoh/reckless-drivin-sdl/build.yml?label=Linux&logo=linux)](https://github.com/DarrCoh/reckless-drivin-sdl/actions/workflows/build.yml)
 [![Windows](https://img.shields.io/github/actions/workflow/status/DarrCoh/reckless-drivin-sdl/build.yml?label=Windows&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2ZmZiI+PHBhdGggZD0iTTAgMy40NDlMOS43NSAyLjF2OS40NTFIMG0xMC45NDktOS42MDJMMjQgMHYxMS40SDEwLjk0OU0wIDEyLjZoOS43NXY5LjQ1MUwwIDIwLjY5OU0xMC45NDkgMTIuNkgyNFYyNGwtMTIuOS0xLjgwMSIvPjwvc3ZnPg==)](https://github.com/DarrCoh/reckless-drivin-sdl/actions/workflows/build.yml)
 
-### A native SDL2 port of the classic Mac OS racing game
+### A native SDL2 port of the classic Mac OS racing game, Multiplayer Edition
 
 *Originally by [Jonas Echterhoff](https://github.com/jechter/RecklessDrivin) (2000), brought back to life on modern hardware*
 
@@ -24,9 +24,16 @@
 
 </div>
 
+> **About this README:** most of it comes from the
+> [SDL2 port](https://github.com/DarrCoh/reckless-drivin-sdl) by Darren Cohen,
+> including *The Story* below and the technical sections. The parts marked
+> *Multiplayer Edition* were added by Cengineering.
+
 ---
 
 ## The Story
+
+*By Darren Cohen, who made the SDL2 port this edition is built on.*
 
 Reckless Drivin' was one of *those* games. The kind that came pre-installed (or maybe my brothers found it on some shareware CD) on our family Mac back in the day. My brothers and I played it for hours, weaving through traffic, smashing into things, trying to beat each other's times.
 
@@ -38,11 +45,25 @@ This is the result: a port of Reckless Drivin' with all 10 levels, every screen,
 
 ---
 
+## Why a Multiplayer Edition
+
+*By Cengineering, Multiplayer Edition (2026).*
+
+I played Reckless Drivin' with my brother, too. He found it on the CD-ROM of a computer magazine, and we were hooked long before the shareware levels ran out. To register it, we went to the bank together to change our money, put the cash in an envelope and mailed it to Jonas Echterhoff. Then we waited. I still remember the day the letter with the registration code arrived; it is one of those small moments that stayed with me, just like all the hours we spent racing, crashing and laughing in front of that screen with my siblings.
+
+As a kid I always wondered how the game actually worked: why the cops knew where to find you, how the traffic decided when to brake, what was inside those add-on packages. With the source code open, I finally got to look under the hood, and changing and extending those mechanics for multiplayer turned out to be just as much fun as playing it back then.
+
+The original only ever let one of us drive at a time, while the others watched and waited for their turn. I made the multiplayer mode so that my siblings and I can play it together again, each in our own car, and relive a piece of our childhood side by side. This edition is my thank-you to that game and to those afternoons, and maybe it brings other brothers and sisters, friends and kids together in front of the screen as well.
+
+None of this would exist without the people who brought the game back. Thank you, Jonas Echterhoff, for making it and for releasing the source; thank you, Darren Cohen, for porting it to today's computers, and Nate Craddock for the reverse engineering that made that possible. Being able to start Reckless Drivin' again on a modern Mac is getting a piece of my childhood back.
+
+---
+
 ## Features
 
 - **All 10 levels fully playable:** including the encrypted shareware levels, properly decrypted with the [free registration key](http://jonasechterhoff.com/Reckless_Drivin.html)
-- **24 driveable vehicles:** sports cars, muscle cars, motorcycles, semi trucks, a tank, a helicopter, police interceptors, boats, and more; all selectable via the cheat mode level select
-- **Pixel-perfect rendering:** 640x480 ARGB1555, software-rendered and uploaded via SDL2 streaming texture
+- **24 driveable vehicles:** sports cars, muscle cars, motorcycles, semi trucks, a tank, a helicopter, police interceptors, boats, and more; selectable via the cheat mode level select and multiplayer vehicle selection
+- **Pixel-perfect rendering:** 640x480, software-rendered into a 32-bit framebuffer and uploaded via SDL2 streaming texture; the original 16-bit art looks as it did, HQ assets keep their full color
 - **Full audio:** 18-channel software mixer at 44.1 kHz stereo, with Doppler effect and 3D positional sound
 - **Every screen implemented:** main menu, help, high scores, preferences, pause, game over, and scrolling credits
 - **High score table:** top 10 scores rendered on-screen with keyboard name entry
@@ -50,11 +71,106 @@ This is the result: a port of Reckless Drivin' with all 10 levels, every screen,
 - **Menu polish:** hover highlights and press states on all buttons, click sound feedback
 - **Remappable controls:** rebind all 8 game keys from the Preferences menu
 - **Gamepad support:** SDL2 GameController API with analog stick + triggers
+- **Multiplayer:** up to four drivers over a local network or on one computer, with split-screen views
+- **Per-player controls:** configure Solo and all four local/network driver key profiles from Preferences or by pressing P in the multiplayer menu
 - **Resizable window:** maintains 4:3 aspect ratio with letterboxing
+- **Optional 2x upscaling:** smooth 1280x960 display output, selectable in Preferences
+- **Optional AI rendering:** toggle enhanced sprites, textures, HUD, and menus on/off in Preferences; OFF uses the original game graphics
 - **Persistent preferences:** settings, high scores, lap records, and key bindings saved between sessions
 - **Native macOS app bundle:** builds as a proper `.app` with SDL2 bundled inside; distribute as a DMG or zip it and send to a friend
 - **Broad compatibility:** macOS 11.0+ (Big Sur through current), Windows 10/11 (x64), Linux (x86_64, ARM64)
 - **No external dependencies on macOS:** SDL2 is bundled into the app automatically; no Homebrew or manual installs needed to run
+
+---
+
+## Multiplayer Edition
+
+*Added by Cengineering.* This fork turns the port into a party game: up to four drivers race each
+other on one computer (split screen) or across a local network, with game
+modes, new crates and wilder traffic on top of the original game. Single
+player stays as it was; the original traffic and add-ons are one setting away
+(**Game Mode: ORIGINAL** in Preferences).
+
+### What's new
+
+- **Local and LAN multiplayer** for up to four drivers, split screen or own
+  screen, each with their own car, controls, lives, score and finish result
+- **LAN host search:** joining lists the hosts on the network, no IP typing
+- **One shared world:** the host simulates traffic, cops and pickups, so every
+  computer sees the same cars, dents, skid marks, explosions and packages
+- **Common start:** cars wait until every computer has loaded the level, then
+  3, 2, 1, GO; the host runs the race clock for everyone
+- **Five game modes** and **21 kinds of crates**, each with an adjustable
+  frequency, plus **11 crate themes**
+- **Extended traffic:** overtaking, jams, panic and road rage after crashes,
+  police that hunt whoever rams them
+- **AI-upscaled HQ graphics** for sprites, roads, HUD, menus and font
+  (optional, compressed to about 85 MB)
+
+### LAN in five steps
+
+1. Start the game on every computer (same version on all of them).
+2. On one computer choose **MULTIPLAYER**, pick a mode with **M** or the
+   arrows, set the crates with **K**, then **HOST LAN GAME**.
+3. On the others choose **MULTIPLAYER** and **JOIN LAN GAME**; the host
+   appears in the list.
+4. Everyone picks a car in the lobby (and **V** for split or own screen).
+5. The host starts; the race begins on all computers with a countdown.
+
+### Game modes
+
+| Mode | What happens |
+|---|---|
+| **Co-op** | Hits cost a life but score nothing; finished drivers can give a life to a driver who is out |
+| **Duel** | Missiles and mines hit rivals too; every takedown scores 1000 points |
+| **Packages** | Packages all over the road; a cop swarm hunts the driver who found it, with at least 20 cops |
+| **Police** | Two more cops every 2.5 seconds, and they ram |
+| **Zombie** | Every ordinary car near a driver turns and hunts him |
+
+### Crates
+
+Add-on packages can contain any of these (the timed ones last 15 seconds):
+
+| Crate | Effect |
+|---|---|
+| Addon Lock, Mines, Missiles, Spikes, Police Jammer, Turbo, 2000 Points, Extra Life | The original eight add-ons |
+| Super Grip | 1.8 times the road grip |
+| Offroad Tyres | Leaving the road is no crash |
+| Magnet | Packages close by fly to the car |
+| Shield | The next crash costs no life |
+| Battering Ram | Rammed cars fly off and explode |
+| Oil Slick | Oil behind the car sends followers spinning |
+| Nitro | Two and a half times the engine power, with flames |
+| Rain Maker | Rain and much less grip for everyone else |
+| Zombie Cars | Traffic hunts the other drivers (alone: you) |
+| Car War | Traffic rams each other into the ditch |
+| Clear Road | Traffic makes way early, without leaving its carriageway |
+| Cop Swarm | A pack of police cars hunts the race leader |
+| Traffic Jam | A wall of slow cars ahead of the race leader |
+
+In the **CRATES** screen (**K**) every crate gets **OFF**, **RARE**, **NORMAL**
+or **OFTEN**, and the number of packages on the road is **FEW** to **MANY**.
+
+### Crate themes
+
+Instead of one mix, a theme can decide, either the same every level or a
+random one per level (announced at the start):
+
+| Theme | Mostly |
+|---|---|
+| Weapons | Mines, missiles, spikes, ram, oil |
+| Speed | Turbo, nitro, grip, offroad tyres, clear road |
+| Chaos | Swarm, jam, zombies, car war, rain |
+| Survival | Shield, jammer, extra life, clear road |
+| Police | Cop swarm, jammer, nitro, ram |
+| Classic | The original eight add-ons |
+| Mayhem | Everything, often |
+| Pranks | Oil, rain, magnet, ram, clear road |
+| Hunters | Zombies, car war, swarm, shield |
+| Traffic | Jam, clear road, car war, offroad tyres |
+| Lucky | Extra life, points, shield, addon lock |
+
+Every theme's mix is shown in the CRATES screen and can be edited there.
 
 ---
 
@@ -155,6 +271,271 @@ Copy `SDL2.dll` from `vcpkg/installed/x64-windows/bin/` next to the exe if distr
 | Quit | `Escape` |
 
 To rebind keys: **Preferences > Controls > Configure**
+
+### Graphics
+
+In **Preferences**, toggle **2X Upscaling** to display the game's 640x480
+framebuffer smoothly scaled to 1280x960. The game still renders its original
+pixel-art graphics at 640x480; this mode changes the display scaling and window
+size rather than adding detail to the original assets.
+
+The experimental **HQ 4K Mode** opens the game fullscreen at the display's
+native resolution (up to 4K). To keep the software renderer responsive, the
+game renders internally at 2x (1280x960) and lets SDL scale that image to the
+display. On a 4K display the 4:3 game image is fitted inside the 3840x2160
+output with side bars. Enable this mode and restart the app to apply the
+internal resolution.
+
+The **AI Rendering** option enables locally generated 4x assets for game sprites,
+road/grass/border and track textures, cockpit/HUD RLE images, and supported
+menu/background PICT images. It requires **HQ 4K Mode** and a restart. On
+macOS, run
+`tools/upscale-game-sprites-macos.sh` to extract the 16-bit game sprites and
+process them locally with Real-ESRGAN. The script also exports and processes
+the scene, interface, and menu art; repeating textures are processed with
+wrapped borders to avoid seams. The official Real-ESRGAN macOS release and
+models are stored under `build/ai-upscaler/`. Game assets are processed locally
+and are not uploaded to a remote service. When processing finishes, the
+generated assets are packaged into both app bundles and loaded by the 4x
+renderer, sampling them at the 2x internal resolution. Missing or invalid
+generated files fall back to the original game art. Road texture coordinates
+are anchored to the road rather than drifting independently. The HQ renderer
+uses zoom-aware mip levels with trilinear filtering to reduce high-speed
+shimmer. Cars and scenery both use the AI sprites; when the camera zooms out
+at speed, a filtered half-resolution copy is drawn to avoid shimmer. Road
+borders are positioned with sub-pixel precision. Upscaled road textures, HUD,
+and menu art are shown with their full 8-bit-per-channel color; the AI sprite
+files are stored as 32-bit RGBA with soft alpha edges (older 16-bit sprite
+files still load). The font of the text effects (LEVEL COMPLETED, OUCH,
+score pop-ups, weapon counters) is upscaled too and drawn with soft edges.
+Grass, water and other backgrounds use the `realesrgan-x4plus` model; road
+surfaces, borders, skid tracks and marks use `realesr-animevideov3`, which
+avoids the stripe artifacts x4plus adds there; sprites, HUD art and the font
+use the anime model. `ONLY_SPRITES=1` or `ONLY_SCENE=1` before
+`tools/upscale-game-sprites-macos.sh` regenerates just the sprites or just
+the textures, HUD, pictures and font. Close the game before running the
+script: it replaces the app bundles. Generated assets and the upscaler are
+build artifacts and are not part of the source distribution.
+
+The assets are compressed losslessly (a PNG-like average filter, then zlib),
+which takes them from about 340 MB to about 85 MB; the script does this with
+`tools/compress-ai-assets.py` (it needs numpy for the filter, otherwise it
+uses plain zlib), and the game unpacks them when loading. The game needs
+zlib for this, which CMake finds on macOS and most Linux systems.
+
+To check rendering performance, start the game with `RD_FRAMESTATS=1` set in
+the environment (for example
+`RD_FRAMESTATS=1 build/RecklessDrivin.app/Contents/MacOS/RecklessDrivin`).
+Every two seconds it prints the simulated and drawn frame rate, the number of
+skipped frames, and the average and worst software render time per frame
+(vsync wait excluded). Above ~16.7 ms the game starts skipping frames, which
+looks like stutter at high speed.
+
+Traffic checks for nearby collidable vehicles across the full active object
+list, including split-screen and network drivers, and still brakes for them
+even when its path is marked as non-stopping.
+
+### Local Multiplayer
+
+Click the **MULTIPLAYER** license-plate button on the main menu. The first
+multiplayer menu shows clickable **1–4** buttons beside **LOCAL GAME**; choose
+the player count there, then click **LOCAL GAME** to start. The selection is
+saved. Player names and each driver's controls can be changed in
+**Preferences**.
+Each driver can choose a vehicle before the race. Two players share the
+keyboard by default; configure the controls there if you add more drivers.
+Each view follows its own car.
+
+Press **`2`** on the main menu as a shortcut to start local multiplayer directly.
+
+### LAN Multiplayer
+
+Click the **MULTIPLAYER** license-plate button and choose **HOST LAN GAME** on
+the host computer. Choose the target player count (2–4); the host lobby waits
+until that many players, including the host, have connected. The **START RACE**
+button becomes available when the target count is reached. On each other
+computer, choose **JOIN LAN GAME**: the game searches the network and lists
+the hosts it finds with their name and driver count; click one (or press its
+number). Press **M** there to type an IPv4 address instead; the host lobby
+shows its own address. After joining, a waiting screen shows whether the host
+answered and waits until the host starts the race. In both lobbies every
+driver picks a vehicle with LEFT/RIGHT (or by clicking the arrows) and sees
+the other drivers' choices; the race then starts on all computers at once.
+Each player chooses their own view with **V** in the lobby (or **LAN View** in
+Preferences): **SPLIT SCREEN** shows every driver, **OWN SCREEN** only your
+own car, full size. A driver whose computer stalls briefly rejoins automatically, and a computer
+that joins again after leaving without notice (or after a restart) gets its
+old slot back. When a LAN game ends, every computer closes the session, so
+hosting and joining again start afresh. If the host never answers,
+make sure it is in the LAN lobby and that its firewall allows incoming
+connections for the game (macOS asks when the host lobby opens; a rebuilt app
+may ask again). The default port is **33777** (UDP). Alternatively, start
+the host and clients from a terminal:
+
+```bash
+./RecklessDrivin --host
+```
+
+On each other computer, join using the host's IPv4 address:
+
+```bash
+./RecklessDrivin --join 192.168.1.20
+```
+
+The host starts the race from the main menu; connected clients start with it.
+The default UDP port is **33777** (override with `--host PORT` or
+`--join IPv4 PORT`). Allow that port through the host's firewall. LAN races
+support up to four drivers total, including the host. Connected players need
+to use the same game version.
+
+In multiplayer, each driver keeps a separate score, weapon inventory, and
+life count. When a driver crosses the finish line, their own view plays the
+level-complete sequence (time bonus count-up and multiplier) while the others
+keep racing, then shows their name, total score, and high-score place; the
+leaderboard entry is saved under that driver's name. A driver who loses their
+last life sits out the rest of the level and returns in the next level with one
+life. The next level starts once every driver has finished or is out and all
+finishers have seen their result. The game is over only when all drivers have
+lost all their lives in the same level.
+
+The HUD shows each driver's live race position. The first three drivers
+across the line earn a placement bonus of 1000, 500, and 250 points. Drivers
+who are out watch the leader from their own view. Drivers far behind the leader
+often get extra missiles and mines from add-on pickups, and the police prefer
+to chase the leader.
+
+Press **M** in the multiplayer menu to cycle through five modes (on a LAN, the
+host's mode applies; packages and police also work with one local player):
+
+- **Co-op:** hits cost a life but score nothing. A driver who has finished
+  with at least two lives can press fire to give one life to a driver who is
+  out, and that driver rejoins the race at once.
+- **Duel:** missiles and mines hit the other drivers too. Every rival taken out
+  earns 1000 points and counts as a kill in the HUD. On a LAN, every missile
+  and mine is replayed on all computers, and the computer that drives a car
+  decides whether it was hit.
+- **Packages:** like co-op, but about every 320 pixels of road holds a weapon
+  package (over 100 per level). A package can be a crate: a traffic jam hits
+  the race leader, while a cop swarm hunts the driver who picked it up, with
+  at least 20 cops. Like the level's own cops they come down the oncoming
+  lanes from above the screen and turn round to chase once he is past.
+- **Police:** like co-op, but every 2.5 seconds two more cops come after each
+  driver, until about ten are around them.
+- **Zombie:** like co-op, but every ordinary car that comes within about
+  1000 pixels of a driver turns and hunts him down. There is extra traffic.
+
+Press **K** in the multiplayer menu to choose the crates:
+
+- **Packages**: **FEW** (half of the level's), **NORMAL**, **MORE** (one every
+  640 pixels) or **MANY** (every 320 pixels).
+- **Frequency** of every crate (the original eight add-ons, the new ones
+  below, the cop swarm, the traffic jam, car war and clear road): **OFF**, **RARE**,
+  **NORMAL** or **OFTEN** (often comes twice as often as normal, rare half as
+  often).
+- **Themes**: **OFF** (your own list), **RANDOM** (every level draws one of
+  the themes, shown at the start of the level) or always one theme:
+  **WEAPONS**, **SPEED**, **CHAOS**, **SURVIVAL**, **POLICE**, **CLASSIC**,
+  **MAYHEM**, **PRANKS**, **HUNTERS**, **TRAFFIC** or **LUCKY**. With themes
+  on, the list shows the frequencies of the theme being edited (chosen in the
+  **EDIT THEME** row) and changes them; **R** resets a theme to its original
+  mix.
+
+The choice applies in every mode (package mode has at least many packages),
+on a LAN the host's choice (and theme) applies, and it is kept in a `Crates`
+file next to the preferences.
+
+A cop swarm takes the police jammer away from the driver it hunts, and for
+30 seconds no new jammer can be picked up. In extended mode and the
+multiplayer modes, an add-on can also be **SUPER GRIP** (1.8 times the road
+grip for 15 seconds) or **OFFROAD TYRES** (for 15 seconds, leaving the road is
+no crash; not on water levels). More add-ons there:
+
+- **MAGNET** (15 s): packages close by fly to the car and are collected.
+- **SHIELD**: the next crash costs no life (a glowing ring around the car,
+  which blinks for two more seconds after it is used).
+- **BATTERING RAM** (15 s): cars you ram fly off and explode, and you are not
+  slowed down.
+- **OIL SLICK** (15 s): drops oil behind the car that sends followers spinning.
+- **NITRO** (15 s): two and a half times the engine power, with flames.
+- **RAIN MAKER** (15 s, multiplayer): it rains for every other driver, with
+  much less grip.
+- **ZOMBIE CARS** (15 s): ordinary traffic near the other drivers turns and
+  hunts them; playing alone, it hunts you. Afterwards it drives on normally.
+- **CAR WAR** (15 s): traffic near the drivers picks the closest other car and
+  tries to ram it off the road into the ditch. It wins over zombies and
+  furious cars: while it lasts, nobody hunts the drivers.
+- **CLEAR ROAD** (15 s): traffic makes way early, moving aside well before you
+  reach it, but stays on its carriageway instead of driving into the ditch. Pickup names appear small at the top of the view;
+quick pickups stack in rows.
+
+Ramming a cop makes it chase you (in multiplayer it switches to you even if
+it was after another driver); one that came the other way turns round.
+Ramming an ordinary car can also make it furious: instead of fleeing, it
+honks and chases you for 12 seconds (half of the cars in multiplayer, a
+quarter alone).
+
+In packages, police and zombie mode the cops (and zombies) hunt: they have more engine power, steer
+straight at where the driver is heading from any side to ram him, do not wait
+when they overtake, and only give up three times further away.
+
+In multiplayer, missiles and mines always hit the other drivers. In co-op a hit
+only costs the victim a life; in duel mode the shooter also scores 1000 points.
+
+On a LAN the host simulates the whole world: traffic, cops, pickups, crates
+and scenery. Twenty times a second it sends every client the objects near
+that client's car, and the client shows copies of them instead of generating
+its own. Whatever a client destroys or collects is reported to the host, so
+all computers see the same cars, cops and packages.
+
+Other drivers' cars are shown 100 ms in the past, between two received
+states, so they move smoothly even when packets arrive in bursts. Dents and
+colours of cars are the same on every computer, and every computer draws the
+other drivers' tire tracks, dust, brake lights, spikes, jumps and explosions,
+and the smoke and fire of wrecked cars. Drivers start on a grid, two
+side by side, and a driver who respawns is placed away from the others. A LAN
+race starts on every computer at once: cars and the race clock wait until all
+computers have loaded the level, then the host counts down 3, 2, 1, GO and
+runs the race clock for everyone.
+
+If the game crashes, it writes a backtrace to `crash.log` in the preferences
+folder (`~/Library/Application Support/DarrCoh/RecklessDrivin/` on macOS).
+When started from Finder, the console output of the current and the previous
+run is kept there too, as `last-run.log` and `previous-run.log`.
+
+### Extended Mode
+
+**Game Mode** in Preferences switches between **EXTENDED** (default) and
+**ORIGINAL**, which restores the original game behaviour. Extended mode adds:
+
+- a quarter more traffic (half in the packages, police and zombie modes),
+  placed in free gaps when a level loads;
+- traffic that now and then overtakes slower cars when the lane it pulls into
+  is clear (much more often in the chaos modes);
+  cars stuck behind a jam try to get past on whichever side is free, and
+  while out they dodge oncoming cars to the other side or pull back in;
+- traffic only acts strangely after a hard crash (with a player, another car
+  or an obstacle): it panics for a moment (longer, and after lighter crashes,
+  in the chaos modes), flooring it and swerving from
+  lane to lane or turning round in a tight skid to flee the other way, and
+  then drives recklessly for a while before calming down;
+- in multiplayer, add-on pickups can be crates that go off at once against
+  the race leader: a **cop swarm** (six police cars hunting the leader) or
+  a **traffic jam** (a pack of slow cars across the road ahead of the leader).
+  The leader picking up a crate gets an ordinary add-on instead.
+
+In split-screen, messages such as pickups, OUCH, or LEVEL COMPLETED appear
+only in the view of the driver they belong to.
+
+### Internet Multiplayer
+
+The game currently has no matchmaking, lobby service, or relay for Internet
+play; the built-in multiplayer is intended for LAN. A direct connection over
+the Internet may work if the host forwards UDP port **33777** to their computer
+and has a reachable public IP address. A carrier-grade NAT or restrictive
+firewall can prevent this. This is not a one-click Internet setup. A driver who loses all lives is eliminated for that level; if
+another driver completes the level, eliminated drivers return in the next
+level with one life. At the end of the campaign, local drivers enter their
+high-score names separately without pausing on an extra score-table screen.
 
 ### Menu Shortcuts
 
@@ -357,7 +738,16 @@ RecklessDrivin-SDL/
     ├── pause.c              # Pause screen
     ├── particlefx.c         # Particle effects
     ├── random.c             # TT800 pseudo-random number generator
+    ├── netgame.c            # Multiplayer: LAN protocol, world sync, modes, crates
+    ├── extended.c           # Extended traffic, cop swarms, jams, packages
+    ├── player.c             # Per-driver state
+    ├── assetfile.c          # Loading (compressed) AI assets
     └── ...                  # Additional modules
+tools/
+    ├── upscale-game-sprites-macos.sh  # AI upscaling of all game graphics
+    ├── compress-ai-assets.py          # Lossless compression of the AI assets
+    ├── ai_sprite_assets.c, hq_scene_assets.c  # Asset export and packing
+    └── export_levels.c, level-editor/ # Level data export and browser editor
 ```
 
 ---
@@ -367,6 +757,8 @@ RecklessDrivin-SDL/
 - `Cl16` resource id=8 not found at startup (cosmetic; a synthetic fallback palette is used)
 - PPic 1009 (original scrolling credits image) contains QuickDraw text commands that can't be rasterized; replaced with bitmap font credits
 - Gamepad button remapping is not yet exposed in the UI (SDL2's standard mappings handle most controllers automatically)
+- Multiplayer works on a local network only; every computer needs the same version (the protocol version is checked)
+- On a LAN client the world follows the host's states about 100 ms late, so a rammed car reacts a moment after the hit
 
 ---
 
@@ -375,6 +767,8 @@ RecklessDrivin-SDL/
 **Original game:** [Jonas Echterhoff](https://github.com/jechter/RecklessDrivin) (2000), released under the MIT License in 2019
 
 **SDL2 port:** [Darren Cohen](https://github.com/DarrCoh)
+
+**Multiplayer Edition:** [Cengineering](https://github.com/Creativityinengineering/Reckless_Drivin) (2026)
 
 **Built with:** [Claude Code](https://claude.ai/code)
 

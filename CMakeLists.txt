@@ -47,6 +47,10 @@ endif()
 # Source files
 set(SOURCES
     src/main.c
+    src/netgame.c
+    src/player.c
+    src/jobs.c
+    src/extended.c
     src/platform_sdl.c
     src/resources.c
     src/lzrw.c
@@ -62,6 +66,9 @@ set(SOURCES
     src/roaddraw.c
     src/sprites.c
     src/rle.c
+    src/hqassets.c
+    src/assetfile.c
+    src/pict.c
     src/textfx.c
     src/particlefx.c
     src/screen.c
@@ -102,6 +109,39 @@ else()
     add_executable(RecklessDrivin ${SOURCES})
 endif()
 
+# Local-only tools for exporting and packaging AI-upscaled game assets.
+add_executable(ai_sprite_assets
+    tools/ai_sprite_assets.c
+    src/resources.c
+    src/lzrw.c
+    src/packs.c
+)
+target_include_directories(ai_sprite_assets PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+add_executable(hq_scene_assets
+    tools/hq_scene_assets.c
+    src/resources.c
+    src/lzrw.c
+    src/packs.c
+    src/pict.c
+)
+target_include_directories(hq_scene_assets PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+add_executable(export_levels
+    tools/export_levels.c
+    src/resources.c
+    src/lzrw.c
+)
+target_include_directories(export_levels PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+
 # Include directories: our port headers, internal source headers, and SDL2
 target_include_directories(RecklessDrivin PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/include
@@ -111,6 +151,15 @@ target_include_directories(RecklessDrivin PRIVATE
 
 # Preprocessor definitions
 target_compile_definitions(RecklessDrivin PRIVATE SDL_PORT=1)
+
+# zlib unpacks the compressed AI assets (tools/compress-ai-assets.py).
+find_package(ZLIB QUIET)
+if(ZLIB_FOUND)
+    target_compile_definitions(RecklessDrivin PRIVATE RD_HAVE_ZLIB=1)
+    target_link_libraries(RecklessDrivin PRIVATE ZLIB::ZLIB)
+else()
+    message(WARNING "zlib not found: compressed AI assets cannot be loaded")
+endif()
 
 # Compiler warnings
 if(MSVC)
@@ -142,6 +191,11 @@ if(WIN32 AND TARGET SDL2::SDL2main)
     target_link_libraries(RecklessDrivin PRIVATE SDL2::SDL2main)
 endif()
 
+# Windows sockets used by the LAN multiplayer transport.
+if(WIN32)
+    target_link_libraries(RecklessDrivin PRIVATE ws2_32)
+endif()
+
 # macOS-specific: link Cocoa framework (needed by SDL2)
 if(APPLE)
     target_link_libraries(RecklessDrivin PRIVATE "-framework Cocoa")
@@ -156,6 +210,19 @@ if(APPLE)
             "$<TARGET_FILE_DIR:RecklessDrivin>/../Resources/Data"
         COMMENT "Copying Data file into app bundle Resources"
     )
+    if(SDL2_FRAMEWORK)
+        add_custom_command(
+            TARGET RecklessDrivin POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory
+                "$<TARGET_BUNDLE_DIR:RecklessDrivin>/Contents/Frameworks"
+            COMMAND ${CMAKE_COMMAND} -E rm -rf
+                "$<TARGET_BUNDLE_DIR:RecklessDrivin>/Contents/Frameworks/SDL2.framework"
+            COMMAND ditto
+                "${SDL2_FRAMEWORK}"
+                "$<TARGET_BUNDLE_DIR:RecklessDrivin>/Contents/Frameworks/SDL2.framework"
+            COMMENT "Bundling SDL2.framework into app bundle"
+        )
+    endif()
 else()
     add_custom_command(
         TARGET RecklessDrivin POST_BUILD

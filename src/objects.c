@@ -4,6 +4,8 @@
 #include <stdlib.h>
 #include "input.h"
 #include "objects.h"
+#include "netgame.h"
+#include "preferences.h"
 #include "screen.h"
 #include "vec2d.h"
 #include "roads.h"
@@ -77,7 +79,7 @@ void SwapAllObjectTypes(void)
 
 void Explosion(t2DPoint pos,t2DPoint velo,int offs,float mass,int sound)
 {
-	if(fabs(pos.y-gCameraObj->pos.y)<kVisDist)
+	if(Network_NearestDriverDistance(pos.y)<kVisDist)
 	{
 		float l=3*kScale*sqrt(mass*0.001);
 		int i;
@@ -103,6 +105,7 @@ void Explosion(t2DPoint pos,t2DPoint velo,int offs,float mass,int sound)
 					expObj->jumpVelo=15;
 				}
 			if(!expObj) continue;
+			expObj->netLocal=1;
 			expObj->frameDuration=RanFl(0,0.25);
 			expObj->frame=0;
 			expObj->pos.x=pos.x+RanFl(0,l);
@@ -136,11 +139,31 @@ tObject *GetCloseObj(t2DPoint pos,tObject *posObj,float *dist)
 	return closeObj;
 }
 
+/* Extra extended-mode traffic gives up after a few tries on a crowded road
+   instead of searching forever; 0 keeps the original unlimited search. */
+static int sUniquePosLimit;
+static int sUniquePosFailed;
+
+t2DPoint GetUniquePos(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir);
+
+/* GetUniquePos that gives up after maxTries; *found tells whether it worked. */
+t2DPoint GetUniquePosLimited(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir,
+	int maxTries,int *found)
+{
+	t2DPoint pos;
+	sUniquePosLimit=maxTries;
+	pos=GetUniquePos(minOffs,maxOffs,objDir,dir);
+	sUniquePosLimit=0;
+	*found=!sUniquePosFailed;
+	return pos;
+}
+
 t2DPoint GetUniquePos(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir)
 {
 	t2DPoint pos;
 	int ok;
 	int target;
+	int tries=sUniquePosLimit;
 	do{
 		tRoad roadData;
 		float sqdist;
@@ -204,7 +227,8 @@ t2DPoint GetUniquePos(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir)
 				}
 			*dir=kObjectNoInput;
 		}
-	}while(!ok);
+	}while(!ok&&(!sUniquePosLimit||--tries>0));
+	sUniquePosFailed=!ok;
 	if(*objDir==-1)
 	{
 		t2DPoint targetPos=(*dir==kObjectDriveUp?P2D(gTrackUp->track[target].x,gTrackUp->track[target].y)
@@ -296,6 +320,13 @@ tObject *NewObject(tObject *prev,SInt16 typeRes)
 	((tObject*)(prev->next))->prev=theObj;
 	prev->next=theObj;
 	theObj->type=(tObjectTypePtr)GetUnsortedPackEntry(kPackObTy,typeRes,0);
+	theObj->typeRes=typeRes;
+	{
+		static UInt16 nextNetId;
+		if(!++nextNetId)
+			++nextNetId;
+		theObj->netId=nextNetId;
+	}
 	if(!theObj->type){
 		fprintf(stderr, "[objects] NewObject: type %d not found in pack, removing\n", typeRes);
 		((tObject*)theObj->prev)->next=theObj->next;
@@ -319,17 +350,32 @@ tObject *NewObject(tObject *prev,SInt16 typeRes)
 	return theObj;
 }
 
+/* The object with this netId, or nil (e.g. removed meanwhile). */
+tObject *FindObjectByNetId(UInt16 netId)
+{
+	tObject *theObj;
+	if(!netId)
+		return nil;
+	for(theObj=(tObject*)gFirstObj->next;theObj!=gFirstObj;theObj=(tObject*)theObj->next)
+		if(theObj->netId==netId)
+			return theObj;
+	return nil;
+}
+
 void RemoveObject(tObject *theObj)
 {
 	if(theObj==gPlayerObj)
 	{
 		theObj->frame=0;
 		theObj->type=(tObjectTypePtr)GetUnsortedPackEntry(kPackObTy,2000,0);
+		theObj->typeRes=2000;
 	}
 	else
 	{
 		if(((tObject*)theObj->next)->prev!=theObj)
 			return;
+		if(theObj->replica)
+			Network_ForgetReplica(theObj);
 		if(theObj==gFirstVisObj)
 			gFirstVisObj=(tObject*)gFirstVisObj->next;
 		if(theObj==gLastVisObj)
@@ -355,40 +401,66 @@ int CalcBackCollision(t2DPoint pos)
 	return 0;
 }
 
+/* Set while a remote driver's replayed weapon destroys something here. */
+int gNoKillScore;
+
 void KillObject(tObject *theObj)
 {
 	tObjectTypePtr objType=theObj->type;
 	int sinkEnable=CalcBackCollision(theObj->pos)==2&&(*objType).flags2&kObjectSink;
+	/* Another driver's car (e.g. hit while someone else's objects move) must
+	   lose a life with its own state; a remote driver's car is not ours. */
+	if(theObj!=gPlayerObj&&Network_IsDriverObject(theObj))
+	{
+		Network_KillDriver(theObj);
+		return;
+	}
+	/* A copy of a host object: the host has to destroy the original. */
+	if(theObj->replica)
+		Network_ReplicaKilled(theObj);
 	if(theObj==gPlayerObj)
 	{
-		if(!gFinishDelay&&!(gPlayerDeathDelay!=0)&&gPlayerLives)
+		/* Shield crate: this crash costs nothing, and the next moment
+		   neither (still off the road, still in the jam). */
+		if(gCurPlayer->shieldGrace>0)
+			return;
+		if(gCurPlayer->shield&&!gCurPlayer->finishDelay&&!gCurPlayer->deathDelay)
+		{
+			tTextEffect fx={320,60,kEffectSmall+kEffectSinLines,0,"\x0b" "SHIELDhUSED"};
+			NewTextEffect(&fx);
+			gCurPlayer->shield=0;
+			gCurPlayer->shieldGrace=2;
+			FFBJolt(0.6,0.6,0.4);
+			return;
+		}
+		if(!gCurPlayer->finishDelay&&!(gCurPlayer->deathDelay!=0)&&gCurPlayer->lives)
 		{
 			tTextEffect fx={320,240,kEffectExplode,0,"\x07OUCHeee"};
 			NewTextEffect(&fx);
-			gPlayerLives--;
+			gCurPlayer->lives--;
 			FFBJolt(1.0,1.0,1.0);
-			if(!(gPlayerAddOns&kAddOnLock))
+			if(!(gCurPlayer->addOns&kAddOnLock))
 			{
-				gPlayerAddOns=0;
-				gNumMines=0;
-				gNumMissiles=0;
+				gCurPlayer->addOns=0;
+				gCurPlayer->mines=0;
+				gCurPlayer->missiles=0;
 			}
 			else
-				gPlayerAddOns^=kAddOnLock;
-			gPlayerDeathDelay=kPlayerDeathDelay;
+				gCurPlayer->addOns^=kAddOnLock;
+			gCurPlayer->deathDelay=kPlayerDeathDelay;
 		}
 		theObj->slide=0;
-		gPlayerSlide[0]=0;
-		gPlayerSlide[1]=0;
-		gPlayerSlide[2]=0;
-		gPlayerSlide[3]=0;
+		gCurPlayer->slide[0]=0;
+		gCurPlayer->slide[1]=0;
+		gCurPlayer->slide[2]=0;
+		gCurPlayer->slide[3]=0;
 		theObj->throttle=0;
 	}
-	else if((*objType).score)
+	else if((*objType).score&&!gNoKillScore)
 	{
 		tTextEffect fx;
 		Str31 str;
-		gPlayerScore+=(*objType).score;
+		gCurPlayer->score+=(*objType).score;
 		{
 			char tmp[16];
 			int len = sprintf(tmp, "%d", (*objType).score);
@@ -409,7 +481,8 @@ void KillObject(tObject *theObj)
 		RemoveObject(theObj);
 		return;
 	}
-	theObj->type=(tObjectTypePtr)GetUnsortedPackEntry(kPackObTy,(*objType).deathObj+(sinkEnable?gRoadInfo->deathOffs:0),0);
+	theObj->typeRes=(*objType).deathObj+(sinkEnable?gRoadInfo->deathOffs:0);
+	theObj->type=(tObjectTypePtr)GetUnsortedPackEntry(kPackObTy,theObj->typeRes,0);
 	if(!theObj->type){
 		fprintf(stderr, "[objects] KillObject: deathObj %d not found, removing\n", (*objType).deathObj+(sinkEnable?gRoadInfo->deathOffs:0));
 		RemoveObject(theObj);
@@ -435,6 +508,23 @@ static inline void ChangeObjs(tObject* obj1,tObject* obj2)
 	obj2->prev=obj1->prev;
 	obj1->prev=obj2;
 	obj2->next=obj1;
+}
+
+/* Like GetVisObjs, but spanning every driver: traffic near any driver
+   collides and is simulated in detail, not only near player 1. */
+static void GetSimulationVisObjs(void)
+{
+	tObject	*theObj=(tObject*)gFirstObj->next;
+	float minY,maxY;
+	Network_GetDriverRange(&minY,&maxY);
+	minY-=kVisDist;
+	maxY+=kVisDist;
+	while(theObj!=gFirstObj&&theObj->pos.y<minY)
+		theObj=(tObject*)theObj->next;
+	gFirstVisObj=theObj;
+	while(theObj!=gFirstObj&&theObj->pos.y<maxY)
+		theObj=(tObject*)theObj->next;
+	gLastVisObj=theObj;
 }
 
 void GetVisObjs()
@@ -504,6 +594,7 @@ void FireWeapon(tObject *shooter,int weaponID)
 			projectile->jumpVelo=25.0+RanFl(-2.0,2.0);
 		if(projectile->type->weaponInfo)
 			projectile->velo=VEC2D_Sum(shooter->velo,P2D(sin(shooter->dir)*projectile->type->weaponInfo,cos(shooter->dir)*projectile->type->weaponInfo));
+		Network_RecordShot(shooter,projectile,weaponID);
 	}
 }
 
@@ -614,13 +705,58 @@ void MoveObjects()
 {
 	tObject	*theObj=(tObject*)(gFirstObj->next);
 	tInputData *input;
+	int localKeyboard = Network_IsLocalMultiplayer();
 
 	FlushMessageBuffer();
-	Input(&input);
+	if (!localKeyboard)
+		Input(&input);
+	else
+		input = &gInputData;
+	if (Network_IsActive())
+		GetSimulationVisObjs();
 	while(theObj!=gFirstObj)
 	{
 		tObject *next=(tObject*)theObj->next;
-		if((theObj==gPlayerObj)||!(gFrameCount%kLowCalcRatio)){
+		if(Network_IsRemoteObject(theObj)){
+			theObj=next;
+			continue;
+		}
+		if(theObj->replica){
+			/* Driven by the host: follow its states, animate here. */
+			Network_MoveReplica(theObj);
+			AnimateObject(theObj);
+			theObj=next;
+			continue;
+		}
+		if(Network_IsDriverObject(theObj)){
+			tInputData *driverInput = input;
+			Network_BindDriver(theObj);
+			/* Read buttons even after the finish: fire gives a life away there. */
+			if(localKeyboard) {
+				/* Each driver has their own gear-change timer; a shared one
+				   kept a moving player 1 from letting player 2 leave reverse. */
+				gInputData = theObj->input;
+				gSwitchDelayStart = gCurPlayer->switchDelayStart;
+				Input(&driverInput);
+				gCurPlayer->switchDelayStart = gSwitchDelayStart;
+				Network_SetDriverButtons(theObj, gFire, gMissile);
+			}
+			if(Network_DriverIsFinished(theObj)||Network_DriverIsEliminated(theObj)||
+				Network_RaceHeld()||
+				(gCurPlayer->lives<=0&&gCurPlayer->deathDelay<=0)) {
+				theObj->input.throttle=0;
+				theObj->input.steering=0;
+				theObj->input.brake=1;
+			} else {
+				ObjectControl(theObj,driverInput);
+				ObjectPhysics(theObj);
+			}
+			Network_UnbindDriver();
+			if(next->prev==theObj){
+				MoveObject(theObj);
+				AnimateObject(theObj);
+			}
+		}else if((theObj==gPlayerObj)||!(gFrameCount%kLowCalcRatio)){
 			if(gFrameCount%(2*kLowCalcRatio))
 				ObjectControl(theObj,input);
 			ObjectPhysics(theObj);

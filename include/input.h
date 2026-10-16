@@ -29,6 +29,7 @@ enum{
 };
 
 extern int gFire,gMissile;
+extern tInputData gInputData;
 
 void InputMode(int);
 void InitInput();
@@ -39,5 +40,7 @@ void FlushInput();
 void FFBJolt(float lMag,float rMag,float duration);
 void FFBDirect(float lMag,float rMag);
 int ContinuePress();
+
+extern unsigned long gSwitchDelayStart;
 
 #endif

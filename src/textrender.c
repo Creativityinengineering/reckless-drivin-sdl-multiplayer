@@ -6,7 +6,9 @@
  */
 
 #include "textrender.h"
+#include "platform.h"
 #include <string.h>
+#include <math.h>
 
 /* ======================================================================== */
 /* 8x8 bitmap font data (CP437, printable ASCII 32..126)                    */
@@ -115,30 +117,36 @@ static const UInt8 kFont8x8[95][8] = {
 /* Drawing functions                                                         */
 /* ======================================================================== */
 
-void TR_DrawChar(UInt16 *fb, int stride, int x, int y,
+void TR_DrawChar(tPixel *fb, int stride, int x, int y,
                  char ch, UInt16 color, int scale)
 {
     int idx = (int)ch - 32;
     if (idx < 0 || idx >= 95) return;
     const UInt8 *glyph = kFont8x8[idx];
+    tPixel pixel = Pixel555(color);
+    int renderScale = Platform_GetRenderScale();
+    int pixelScale = scale * renderScale;
+    x *= renderScale;
+    y *= renderScale;
 
     for (int row = 0; row < 8; row++) {
         UInt8 bits = glyph[row];
         for (int col = 0; col < 8; col++) {
             if (bits & (1 << col)) {
-                for (int sy = 0; sy < scale; sy++)
-                    for (int sx = 0; sx < scale; sx++) {
-                        int px = x + col * scale + sx;
-                        int py = y + row * scale + sy;
-                        if (px >= 0 && px < SCREEN_WIDTH && py >= 0 && py < SCREEN_HEIGHT)
-                            fb[py * stride + px] = color;
+                for (int sy = 0; sy < pixelScale; sy++)
+                    for (int sx = 0; sx < pixelScale; sx++) {
+                        int px = x + col * pixelScale + sx;
+                        int py = y + row * pixelScale + sy;
+                        if (px >= 0 && px < SCREEN_WIDTH * renderScale &&
+                            py >= 0 && py < SCREEN_HEIGHT * renderScale)
+                            fb[py * stride + px] = pixel;
                     }
             }
         }
     }
 }
 
-void TR_DrawString(UInt16 *fb, int stride, int x, int y,
+void TR_DrawString(tPixel *fb, int stride, int x, int y,
                    const char *str, UInt16 color, int scale)
 {
     while (*str) {
@@ -153,27 +161,85 @@ int TR_StringWidth(const char *str, int scale)
     return (int)strlen(str) * 8 * scale;
 }
 
-void TR_DrawStringRight(UInt16 *fb, int stride, int rightX, int y,
+void TR_DrawStringRight(tPixel *fb, int stride, int rightX, int y,
                         const char *str, UInt16 color, int scale)
 {
     int w = TR_StringWidth(str, scale);
     TR_DrawString(fb, stride, rightX - w, y, str, color, scale);
 }
 
-void TR_DrawStringCentered(UInt16 *fb, int stride, int centerX, int y,
+void TR_DrawStringCentered(tPixel *fb, int stride, int centerX, int y,
                            const char *str, UInt16 color, int scale)
 {
     int w = TR_StringWidth(str, scale);
     TR_DrawString(fb, stride, centerX - w / 2, y, str, color, scale);
 }
 
-void TR_FillRect(UInt16 *fb, int stride, int x, int y,
+void TR_FillRect(tPixel *fb, int stride, int x, int y,
                  int w, int h, UInt16 color)
 {
-    for (int py = y; py < y + h && py < SCREEN_HEIGHT; py++)
-        for (int px = x; px < x + w && px < SCREEN_WIDTH; px++)
+    tPixel pixel = Pixel555(color);
+    int renderScale = Platform_GetRenderScale();
+    x *= renderScale;
+    y *= renderScale;
+    w *= renderScale;
+    h *= renderScale;
+    for (int py = y; py < y + h && py < SCREEN_HEIGHT * renderScale; py++)
+        for (int px = x; px < x + w && px < SCREEN_WIDTH * renderScale; px++)
             if (px >= 0 && py >= 0)
-                fb[py * stride + px] = color;
+                fb[py * stride + px] = pixel;
+}
+
+/* The 8x8 font stretched to charW x charH (in 640x480 units) with smoothed
+   edges, drawn at full render resolution: tall, condensed letters such as
+   on licence plates. */
+static float GlyphSample(const UInt8 *glyph, float u, float v)
+{
+    int x0 = (int)floorf(u), y0 = (int)floorf(v);
+    float fx = u - x0, fy = v - y0, sum = 0;
+    int dx, dy;
+    for (dy = 0; dy < 2; dy++)
+        for (dx = 0; dx < 2; dx++) {
+            int gx = x0 + dx, gy = y0 + dy;
+            float weight = (dx ? fx : 1 - fx) * (dy ? fy : 1 - fy);
+            if (gx >= 0 && gx < 8 && gy >= 0 && gy < 8 && (glyph[gy] & (1 << gx)))
+                sum += weight;
+        }
+    return sum;
+}
+
+void TR_DrawStringSmooth(tPixel *fb, int stride, float x, float y,
+                         const char *str, float charW, float charH, tPixel color)
+{
+    int renderScale = Platform_GetRenderScale();
+    int width = SCREEN_WIDTH * renderScale, height = SCREEN_HEIGHT * renderScale;
+    float cw = charW * renderScale, ch = charH * renderScale;
+    float left = x * renderScale, top = y * renderScale;
+    for (; *str; str++, left += cw) {
+        int idx = (int)*str - 32, px, py;
+        const UInt8 *glyph;
+        if (idx < 0 || idx >= 95)
+            continue;
+        glyph = kFont8x8[idx];
+        for (py = (int)top; py < (int)(top + ch) + 1; py++)
+            for (px = (int)left; px < (int)(left + cw) + 1; px++) {
+                float u = (px + 0.5f - left) / cw * 8 - 0.5f;
+                float v = (py + 0.5f - top) / ch * 8 - 0.5f;
+                float value, alpha;
+                if (px < 0 || py < 0 || px >= width || py >= height)
+                    continue;
+                value = GlyphSample(glyph, u, v);
+                /* smoothstep around the half-way level: round, clean edges */
+                alpha = (value - 0.3f) / 0.4f;
+                if (alpha <= 0)
+                    continue;
+                if (alpha > 1)
+                    alpha = 1;
+                alpha = alpha * alpha * (3 - 2 * alpha);
+                fb[py * stride + px] = BlendAlpha(color, fb[py * stride + px],
+                    (UInt32)(alpha * 255));
+            }
+    }
 }
 
 void TR_PStrToC(const unsigned char *pstr, char *cstr, int maxLen)

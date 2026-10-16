@@ -137,9 +137,9 @@ static void DrawRoadZoomed(float xDrawStart,float yDrawStart,float zoom)
 		roadData[2]=((floorPerc*(*floorRoad)[2]+(1-floorPerc)*(*ceilRoad)[2])-xDrawStart)*invZoom;
 		roadData[3]=((floorPerc*(*floorRoad)[3]+(1-floorPerc)*(*ceilRoad)[3])-xDrawStart)*invZoom;
 		drawPos=DrawBorderLineZoomed(drawPos,xDrawStart,0x80000000,roadData[0],worldY,backgrTex,leftBorder,rightBorder,zoom);
-		drawPos=DrawLineZoomed(drawPos,xDrawStart,roadData[0],roadData[1],worldY,gXFrontDriftPos,gYFrontDriftPos,roadTex,zoom);
+		drawPos=DrawLineZoomed(drawPos,xDrawStart,roadData[0],roadData[1],worldY,0,0,roadTex,zoom);
 		drawPos=DrawBorderLineZoomed(drawPos,xDrawStart,roadData[1],roadData[2],worldY,backgrTex,leftBorder,rightBorder,zoom);
-		drawPos=DrawLineZoomed(drawPos,xDrawStart,roadData[2],roadData[3],worldY,gXFrontDriftPos,gYFrontDriftPos,roadTex,zoom);
+		drawPos=DrawLineZoomed(drawPos,xDrawStart,roadData[2],roadData[3],worldY,0,0,roadTex,zoom);
 		drawPos=DrawBorderLineZoomed(drawPos,xDrawStart,roadData[3],0x7fffffff,worldY,backgrTex,leftBorder,rightBorder,zoom);
 		drawPos+=rowBytesSkip;
 	}
@@ -149,8 +149,8 @@ static void DrawMarksZoomed(float xDrawStart,float yDrawStart,float zoom)
 {
 	float invZoom=1/zoom;
 	int l=0,r=gMarkSize,i;
-	int yClipWorld=(gYSize-(gFinishDelay?0:kInvLines))*zoom;
-	int yClip=(gYSize-(gFinishDelay?0:kInvLines));
+	int yClipWorld=(gYSize-(gCurPlayer->finishDelay?0:kInvLines))*zoom;
+	int yClip=(gYSize-(gCurPlayer->finishDelay?0:kInvLines));
 	Ptr trackTex=GetUnsortedPackEntry(kPackTxtR,(*gRoadInfo).marks,nil);
 	while(r-1>l)
 		if(gMarks[(l+r)/2].p1.y>yDrawStart)
@@ -174,7 +174,7 @@ static void DrawTracksZoomed(float xDrawStart,float yDrawStart,float zoom)
 {
 	float invZoom=1/zoom;
 	int i;
-	int yClip=gYSize-(gFinishDelay?0:kInvLines);
+	int yClip=gYSize-(gCurPlayer->finishDelay?0:kInvLines);
 	Ptr trackTex=GetUnsortedPackEntry(kPackTxtR,(*gRoadInfo).tracks,nil);
 	for(i=0;i<gTrackCount;i++)
 	{

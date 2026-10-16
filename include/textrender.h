@@ -9,6 +9,7 @@
  */
 
 #include "compat.h"
+#include "pixel.h"
 #include "platform.h"
 
 /* ARGB1555 color constants */
@@ -24,26 +25,28 @@
 #define COL_BAR_FG  0x2D6B
 
 /* Draw a single character at (x,y) with given color and pixel scale (1=8x8, 2=16x16, etc.) */
-void TR_DrawChar(UInt16 *fb, int stride, int x, int y,
+void TR_DrawChar(tPixel *fb, int stride, int x, int y,
                  char ch, UInt16 color, int scale);
 
 /* Draw a null-terminated C string left-aligned at (x,y) */
-void TR_DrawString(UInt16 *fb, int stride, int x, int y,
+void TR_DrawString(tPixel *fb, int stride, int x, int y,
                    const char *str, UInt16 color, int scale);
 
 /* Draw a string right-aligned so its right edge is at rightX */
-void TR_DrawStringRight(UInt16 *fb, int stride, int rightX, int y,
+void TR_DrawStringRight(tPixel *fb, int stride, int rightX, int y,
                         const char *str, UInt16 color, int scale);
 
 /* Draw a string centered horizontally around centerX */
-void TR_DrawStringCentered(UInt16 *fb, int stride, int centerX, int y,
+void TR_DrawStringCentered(tPixel *fb, int stride, int centerX, int y,
                            const char *str, UInt16 color, int scale);
 
 /* Compute the pixel width of a string at the given scale */
 int TR_StringWidth(const char *str, int scale);
+void TR_DrawStringSmooth(tPixel *fb, int stride, float x, float y,
+                         const char *str, float charW, float charH, tPixel color);
 
 /* Fill a rectangle with a solid color */
-void TR_FillRect(UInt16 *fb, int stride, int x, int y,
+void TR_FillRect(tPixel *fb, int stride, int x, int y,
                  int w, int h, UInt16 color);
 
 /* Convert a Pascal string (length-prefixed) to a C string (null-terminated) */

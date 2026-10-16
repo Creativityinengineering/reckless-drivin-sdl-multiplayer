@@ -10,5 +10,6 @@
 
 void ObjectControl(tObject *theObj,tInputData *input);
 void ObjectStartChase(tObject *theObj,int distance,float velo);
+void ObjectStartChaseBehind(tObject *theObj,const tObject *driver,int distance,float velo);
 
 #endif

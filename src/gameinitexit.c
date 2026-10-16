@@ -1,6 +1,7 @@
 #include "compat.h"
 #include "input.h"
 #include "screen.h"
+#include "gameinitexit.h"
 #include "gameframe.h"
 #include "roads.h"
 #include "objects.h"
@@ -18,6 +19,8 @@
 #include "preferences.h"
 #include "gamesounds.h"
 #include "textrender.h"
+#include "netgame.h"
+#include "extended.h"
 #include "platform.h"
 #include "sprites.h"
 
@@ -29,21 +32,13 @@ tTrackInfo *gTrackUp,*gTrackDown;
 tMarkSeg *gMarks;
 int gMarkSize;
 int gLevelID;
-tObject *gFirstObj,*gCameraObj,*gPlayerObj,*gSpikeObj,*gBrakeObj,*gFirstVisObj,*gLastVisObj;
+tObject *gFirstObj,*gCameraObj,*gPlayerObj,*gFirstVisObj,*gLastVisObj;
 tTrackSeg gTracks[kMaxTracks];
 int gTrackCount;
-int gPlayerLives,gExtraLives;
-int gNumMissiles,gNumMines;
-float gPlayerDeathDelay,gFinishDelay;
-int gPlayerScore,gDisplayScore;
-int gPlayerBonus;
-UInt32 gPlayerAddOns;
 float gGameTime;
-float gXDriftPos,gYDriftPos,gXFrontDriftPos,gYFrontDriftPos,gZoomVelo;
+float gXDriftPos,gYDriftPos,gXFrontDriftPos,gYFrontDriftPos;
 int gGameOn;
 int gPlayerCarID;
-float gPlayerSlide[4]={0,0,0,0};
-float gSpikeFrame;
 int gLCheat;
 
 
@@ -213,7 +208,7 @@ int LoadLevel()
 			BeQuiet();
 			/* ShowCursor() - handled by platform layer */
 			if(!gLCheat)
-				CheckHighScore(gPlayerScore);
+				CheckHighScore(gCurPlayer->score);
 			InitInterface();
 			return false;
 		}
@@ -250,32 +245,40 @@ int LoadLevel()
 	for(i=0;i<9;i++)
 		if((*gLevelData).objGrps[i].resID)
 			InsertObjectGroup((*gLevelData).objGrps[i]);
+	if(Prefs_IsExtendedMode()||Network_GetGameMode()==kGameModeZombie)
+		Extended_AddTraffic();
+	Extended_AdjustPackages(Network_GetPackageAmount());
 
+	for(i=0;i<kMaxPlayers;i++)
+		Player_ResetForLevel(&gPlayers[i]);
+	if(Network_IsActive())
+		gPlayerCarID=Network_GetPlayerVehicle(Network_GetLocalSlot());
 	gPlayerObj=NewObject(gFirstObj,gRoadInfo->water?kNormalPlayerBoatID:gPlayerCarID);
+	if(!gPlayerObj){
+		fprintf(stderr, "[gameinitexit] LoadLevel: failed to create player object\n");
+		DisposeLevel();
+		return false;
+	}
 	gPlayerObj->pos.x=gLevelData->xStartPos;
 	gPlayerObj->pos.y=500;
 	gPlayerObj->control=kObjectDriveUp;
 	gPlayerObj->target=1;
 	gCameraObj=gPlayerObj;
-	gPlayerBonus=1;
+	gCurPlayer->obj=gPlayerObj;
+	Network_LevelLoaded();
 //	gPlayerObj=nil; //	Uncomment this line to make the player car ai controlled
-	gSpikeObj=nil;
-	gBrakeObj=nil;
 	CopClear();
 	SortObjects();
 
 	gGameTime=0;
+	Network_PrepareRaceClock();
 	gTrackCount=0;
-	gPlayerDeathDelay=0;
-	gFinishDelay=0;
-	gPlayerBonus=1;
-	gDisplayScore=gPlayerScore;
 	gXDriftPos=0;
 	gYDriftPos=0;
 	gXFrontDriftPos=0;
 	gYFrontDriftPos=0;
-	gZoomVelo=kMaxZoomVelo;
 	ClearTextFX();
+	Network_PrepareCrates();	/* after ClearTextFX: it announces the theme */
 	StartCarChannels();
 	gScreenBlitSpecial=true;
 	return true;
@@ -283,6 +286,7 @@ int LoadLevel()
 
 void DisposeLevel()
 {
+	Network_ResetLevel();
 	UnloadPack(kPackLevel1+gLevelID);
 	gPlayerObj=nil;
 	while((tObject*)gFirstObj->next!=gFirstObj)
@@ -351,11 +355,116 @@ static const VehicleInfo kVehicles[] = {
 };
 #define kNumVehicles (sizeof(kVehicles) / sizeof(kVehicles[0]))
 
+/* Vehicle list for the LAN lobbies. */
+int Vehicle_Count(void)
+{
+	return (int)kNumVehicles;
+}
+
+int Vehicle_ID(int index)
+{
+	return kVehicles[(index % (int)kNumVehicles + (int)kNumVehicles) % (int)kNumVehicles].id;
+}
+
+int Vehicle_IndexOf(int id)
+{
+	int i;
+	for (i = 0; i < (int)kNumVehicles; ++i)
+		if (kVehicles[i].id == id)
+			return i;
+	return 0;
+}
+
+const char *Vehicle_Name(int id)
+{
+	return kVehicles[Vehicle_IndexOf(id)].name;
+}
+
+void ChoosePlayerVehicles(int count)
+{
+	int firstSlot, playerCount, player;
+	/* LAN drivers pick their vehicle in the lobby, so nobody stalls the
+	   race start; this chooser is for players sharing one computer. */
+	if (!Network_IsLocalMultiplayer())
+		return;
+	playerCount = Network_IsLocalMultiplayer() ? count : 1;
+	firstSlot = Network_IsLocalMultiplayer() ? 0 : Network_GetLocalSlot();
+	if (playerCount < 1) playerCount = 1;
+	if (playerCount > kNetworkMaxPlayers) playerCount = kNetworkMaxPlayers;
+	Platform_ShowCursor();
+	for (player = 0; player < playerCount; ++player) {
+		int slot = firstSlot + player;
+		int vehicleIndex = 0, rowBytes;
+		tPixel *fb;
+		int fbStride;
+		if (slot < 0 || slot >= kNetworkMaxPlayers)
+			continue;
+		for (int i = 0; i < (int)kNumVehicles; ++i)
+			if (kVehicles[i].id == Network_GetPlayerVehicle(slot)) {
+				vehicleIndex = i;
+				break;
+			}
+		Platform_FlushInput();
+		for (;;) {
+			char name[16];
+			int nameLength = gPrefs.playerNames[slot][0];
+			if (nameLength > 15) nameLength = 15;
+			memcpy(name, gPrefs.playerNames[slot] + 1, (size_t)nameLength);
+			name[nameLength] = '\0';
+			fb = Platform_GetFramebuffer(&rowBytes);
+			if (!fb)
+				break;
+			fbStride = rowBytes/4;
+			TR_FillRect(fb, fbStride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_DKGRAY);
+			TR_FillRect(fb, fbStride, 76, 58, 488, 360, COL_BAR_BG);
+			TR_FillRect(fb, fbStride, 80, 62, 480, 352, COL_DKGRAY);
+			TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 90,
+				"CHOOSE YOUR VEHICLE", COL_YELLOW, 2);
+			TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 128,
+				name, COL_WHITE, 2);
+			TR_FillRect(fb, fbStride, 136, 184, 368, 92, COL_BAR_BG);
+			TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 204,
+				kVehicles[vehicleIndex].name, COL_CYAN, 3);
+			TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 246,
+				kVehicles[vehicleIndex].desc, COL_WHITE, 1);
+			TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 310,
+				"LEFT/RIGHT: CHANGE VEHICLE", COL_GRAY, 1);
+			TR_DrawStringCentered(fb, fbStride, SCREEN_WIDTH / 2, 342,
+				"ENTER: CONFIRM", COL_GRAY, 1);
+			Platform_Blit2Screen();
+
+			Platform_PollEvents();
+			if (Platform_ShouldQuit())
+				break;
+			if (Platform_WasKeyPressed((SDL_Scancode)
+				gPrefs.localKeyCodes[slot][kLeft]) ||
+				Platform_WasKeyPressed(SDL_SCANCODE_LEFT)) {
+				vehicleIndex = (vehicleIndex + (int)kNumVehicles - 1) %
+					(int)kNumVehicles;
+			}
+			if (Platform_WasKeyPressed((SDL_Scancode)
+				gPrefs.localKeyCodes[slot][kRight]) ||
+				Platform_WasKeyPressed(SDL_SCANCODE_RIGHT)) {
+				vehicleIndex = (vehicleIndex + 1) % (int)kNumVehicles;
+			}
+			if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+				Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER) ||
+				Platform_WasKeyPressed((SDL_Scancode)
+					gPrefs.localKeyCodes[slot][kKickdown]))
+				break;
+			SDL_Delay(16);
+		}
+		Network_SetPlayerVehicle(slot, kVehicles[vehicleIndex].id);
+	}
+	Platform_FlushInput();
+	Platform_HideCursor();
+}
+
 void GetLevelNumber()
 {
 	int rowBytes;
-	UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
-	int fbStride = rowBytes / 2;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	int fbStride = rowBytes/4;
 	int level = gLevelID + 1;  /* 1-based display */
 	int vehIdx = 0; /* index into kVehicles */
 	int maxLevel = NumLevels();
@@ -527,17 +636,18 @@ void GetLevelNumber()
 
 void StartGame(int lcheat)
 {
+	if (Network_IsClient() && !Network_GameHasStarted())
+		return;
 	DisposeInterface();
-	gPlayerLives=3;
-	gExtraLives=0;
-	gPlayerAddOns=0;
-	gPlayerDeathDelay=0;
-	gFinishDelay=0;
-	gPlayerScore=0;
+	gCurPlayer=&gPlayers[0];
+	Player_ResetForCampaign(gCurPlayer);
 	gLevelID=0;
 	gPlayerCarID=kNormalPlayerCarID;
-	gNumMissiles=0;
-	gNumMines=0;
+	if (Network_IsActive())
+		ChoosePlayerVehicles(Network_GetLocalDriverCount());
+	Network_StartCampaign();
+	if (Network_IsActive())
+		gPlayerCarID = Network_GetPlayerVehicle(Network_GetLocalSlot());
 	gGameOn=true;
 	gEndGame=false;
 	if(lcheat)
@@ -565,19 +675,44 @@ void StartGame(int lcheat)
 		FadeScreen(512);
 		RenderFrame();
 		InitFrameCount();
+		Network_SetGameStarted();
 	}
 }
 
 void EndGame()
 {
-	gPlayerLives=0;//so RenderFrame will not draw Panel.
+	int scoreIndex, scoreCount;
+	gCurPlayer->lives=0;//so RenderFrame will not draw Panel.
 	RenderFrame();
+	Platform_BeginMultiView(1);
+	Network_GameEnded();
 	DisposeLevel();
 	BeQuiet();
 	SimplePlaySound(152);
 	GameOverAnim();
 	/* ShowCursor() - handled by platform layer */
-	if(!gLCheat)
-		CheckHighScore(gPlayerScore);
+	if(!gLCheat) {
+		if(Network_IsActive()) {
+			/* Scores are kept per driver name; show the table with the best
+			   placed local driver highlighted instead of asking for names. */
+			int bestRank=0;
+			scoreCount=Network_GetLocalScoreCount();
+			for(scoreIndex=0;scoreIndex<scoreCount;scoreIndex++) {
+				const char *name=Network_GetLocalPlayerName(scoreIndex);
+				int rank=name?CheckHighScoreForPlayer(
+					Network_GetLocalScore(scoreIndex),name):0;
+				if(rank>0&&(!bestRank||rank<bestRank))
+					bestRank=rank;
+			}
+			if(bestRank)
+				ShowHighScores(bestRank-1);
+		} else {
+			CheckHighScore(gCurPlayer->score);
+		}
+	}
+	Network_EndLocalGame();
+	/* A LAN game ends here: close the session, so hosting or joining again
+	   starts afresh (an open socket kept the port and the old race). */
+	Network_Shutdown();
 	InitInterface();
 }

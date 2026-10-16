@@ -46,6 +46,19 @@ static const CreditLine kCredits[] = {
 	{"Darren Cohen",      2, COL_WHITE},
 	{"",                  2, COL_WHITE},
 	{"",                  2, COL_WHITE},
+	{"- Multiplayer Edition -", 2, COL_CYAN},
+	{"",                  1, COL_WHITE},
+	{"Cengineering",      2, COL_WHITE},
+	{"2026",              2, COL_GRAY},
+	{"",                  1, COL_WHITE},
+	{"Split screen and LAN races for up to four drivers", 1, COL_WHITE},
+	{"Game modes: Co-op, Duel, Packages, Police and Zombie", 1, COL_WHITE},
+	{"Crates: Nitro, Shield, Magnet, Battering Ram, Oil Slick,", 1, COL_WHITE},
+	{"Super Grip, Offroad Tyres, Rain Maker, Zombie Cars,", 1, COL_WHITE},
+	{"Car War, Clear Road, Cop Swarm and Traffic Jam", 1, COL_WHITE},
+	{"Crate themes, extended traffic and AI-upscaled 4K graphics", 1, COL_WHITE},
+	{"",                  2, COL_WHITE},
+	{"",                  2, COL_WHITE},
 	{"- Reverse Engineering -", 2, COL_CYAN},
 	{"",                  1, COL_WHITE},
 	{"Nate Craddock",     2, COL_WHITE},
@@ -81,8 +94,8 @@ void GameEndSequence()
 	FadeScreen(1);
 
 	int rowBytes;
-	UInt16 *fb = Platform_GetFramebuffer(&rowBytes);
-	int fbStride = rowBytes / 2;
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	int fbStride = rowBytes/4;
 
 	/* Compute total height of credits */
 	int totalHeight = 0;
@@ -117,7 +130,8 @@ void GameEndSequence()
 		}
 
 		/* Clear to black */
-		memset(fb, 0, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(UInt16));
+		memset(fb, 0, (size_t)fbStride * Platform_GetRenderHeight() *
+			sizeof(tPixel));
 
 		/* Draw each credit line at its scrolled position */
 		int lineY = SCREEN_HEIGHT - scrollY; /* start below screen, scroll up */

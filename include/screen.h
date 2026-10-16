@@ -2,6 +2,7 @@
 #define __SCREEN
 
 #include "compat.h"
+#include "pixel.h"
 
 enum{
 	kScreenSuspended,
@@ -12,11 +13,11 @@ enum{
 
 #define kXOrigin (gXSize/2)
 #define kYOrigin (gYSize/2)
-#define kMaxScreenY 640
+#define kMaxScreenY 2048
 #define kLightValues 16
 
 extern Ptr gBaseAddr;
-extern short gRowBytes;
+extern int gRowBytes;
 extern short gXSize,gYSize;
 extern int gOddLines;
 extern Handle gTranslucenceTab,g16BitClut;
