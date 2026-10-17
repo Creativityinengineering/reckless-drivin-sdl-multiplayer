@@ -225,6 +225,65 @@ Every theme's mix is shown in the CRATES screen and can be edited there.
 
 ---
 
+### Level generator
+
+*Added by Cengineering.* Besides the original ten levels, the multiplayer
+menu can build new ones: press **G** (or click the **LEVEL** button) and
+switch **LEVELS** to **GENERATED**. Every setting can be changed with
+LEFT/RIGHT; the map at the bottom shows the whole track from start (green)
+to finish (red), with its bridges.
+
+<p align="center">
+  <img src="screenshots/level-generator.png" width="640" alt="The LEVEL screen: generator settings, seed, level code and a map of the track with two loops">
+</p>
+
+<p align="center">
+  <img src="screenshots/generator-lanes.jpg" width="32%" alt="A generated highway with lanes and heavy traffic">
+  <img src="screenshots/generator-bridge.jpg" width="32%" alt="A generated road crossing itself on a bridge">
+  <img src="screenshots/generator-ice.jpg" width="32%" alt="A twisty generated ice road">
+  <br>
+  <em>Lanes and heavy traffic, a road crossing itself on a bridge, a twisty ice road</em>
+</p>
+
+| Setting | Choices |
+|---|---|
+| **Landscape** | Highway, Coast, Dirt Track, Countryside, River (boats), Harbour, Ice Road, Night Drive, Mountain Pass, Gauntlet: the worlds of the original levels, with their road surface, scenery, traffic and cops |
+| **Length** | Short, Normal, Long, Marathon |
+| **Curves** | Straight, Gentle, Twisty, Crazy |
+| **Road** | Narrow, Normal (one lane each way), 2 Lanes, 3 Lanes (lane lines, cars keep to their lanes; a divided highway with a median) |
+| **Traffic** | None, Light, Normal, Heavy (more with more lanes) |
+| **Traffic speed** | Slow, Normal, Fast, Racing |
+| **Police** | None, Few, Normal, Many |
+| **Jumps** | None, Some, Many, Lots (ramps only on long straight stretches, so every jump lands) |
+| **Time limit** | Relaxed, Normal, Tight, Brutal |
+| **Crossings** | None, One, Two, Three: the road loops round (to the right or the left) and crosses itself on a bridge |
+| **Seed** | Any number (type the digits, **R** for a random one) |
+
+**Level codes.** The seed and all settings together make a level code such as
+`CRNJ-2223-6TVG` (12 letters and digits, no 0/O or 1/I to mix up, with a
+check letter). The same code always builds exactly the same level, on every
+computer and operating system. Write it down and type it in later
+(**LEVEL CODE**, ENTER), or keep it in the game with **SAVE THIS LEVEL**:
+**SAVED LEVELS** lists up to twelve codes to play again or delete. After the
+finish the game carries on with further levels of the same kind. Codes made
+before crossings existed still give the same levels.
+
+**On a LAN** the host's levels are used by everyone: the host sends its code,
+each computer builds the level itself, and the lobby shows the code so
+everybody can note it down.
+
+**Crossings.** With crossings the road is no longer one road per height, the
+way the original engine draws levels: it runs in any direction and passes
+over itself on a bridge. Cars below and on the bridge do not touch; the
+bridge is drawn over the cars underneath, with railings and its shadow on
+the road below. A car thrown or driven off the side of the bridge drops onto
+the road below (a short jump with a landing thud), gets dented and drives
+on; off the bridge's end it lands in the grass. Traffic, cops, jams,
+packages and animals follow the road, places and the finish count the
+distance along it, and the camera looks ahead the way the road goes. Only
+generated levels with crossings use this; the original levels and generated
+levels without crossings run exactly as before. Not on the river (boats).
+
 ## Quick Start
 
 ### Requirements

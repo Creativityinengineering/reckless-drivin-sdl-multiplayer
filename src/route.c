@@ -506,7 +506,7 @@ void Route_DrawBridges(float xDrawStart, float yDrawStart, float zoom)
 		return;
 	/* the shadow: the bridge's shape, a little to the south */
 	for (sy = 0; sy < gYSize; ++sy) {
-		float worldY = yDrawStart - sy * zoom + 44;
+		float worldY = yDrawStart - sy * zoom + 60;
 		const SInt16 *spans;
 		int count = Route_RowSpans((int)(worldY / 2), 1, &spans), k;
 		for (k = 0; k < count; ++k) {
@@ -515,21 +515,36 @@ void Route_DrawBridges(float xDrawStart, float yDrawStart, float zoom)
 			if (x0 < 0) x0 = 0;
 			if (x1 > gXSize) x1 = gXSize;
 			for (x = x0; x < x1; ++x)
-				row[x] = BlendAlpha(PixelRGB(0, 0, 0), row[x], 95);
+				row[x] = BlendAlpha(PixelRGB(0, 0, 0), row[x], 120);
 		}
 	}
 	DrawRouteDeck16(xDrawStart, yDrawStart, zoom);
+	/* concrete: the deck a little lighter than the road */
+	for (sy = 0; sy < gYSize; ++sy) {
+		float worldY = yDrawStart - sy * zoom;
+		const SInt16 *spans;
+		int count = Route_RowSpans((int)(worldY / 2), 1, &spans), k;
+		for (k = 0; k < count; ++k) {
+			int x0 = (int)((spans[2 * k] - xDrawStart) / zoom), x1 = (int)((spans[2 * k + 1] - xDrawStart) / zoom), x;
+			tPixel *row = fb + sy * stride;
+			if (x0 < 0) x0 = 0;
+			if (x1 > gXSize) x1 = gXSize;
+			for (x = x0; x < x1; ++x)
+				row[x] = BlendAlpha(PixelRGB(235, 228, 210), row[x], 55);
+		}
+	}
 	DrawDashes(1, xDrawStart, yDrawStart, zoom);
-	/* railings along both sides of the deck */
-	for (i = 0; i < sCount; i += 2) {
+	/* railings along both sides: a dark edge and a light top */
+	for (i = 0; i < sCount; ++i) {
 		int side;
 		if (!sDeck[i] || !InView(sPoints[i].x, sPoints[i].y, xDrawStart, yDrawStart, zoom, 300))
 			continue;
 		for (side = -1; side <= 1; side += 2) {
-			float x = sPoints[i].x + sPoints[i].hy * sHalfWidth * side;
-			float y = sPoints[i].y - sPoints[i].hx * sHalfWidth * side;
-			BlendRect(x - 4, y - 4, x + 4, y + 4, xDrawStart, yDrawStart, zoom,
-				side < 0 ? PixelRGB(96, 96, 92) : PixelRGB(200, 200, 194), 255);
+			float outer = sHalfWidth + 3, inner = sHalfWidth - 3;
+			float ox = sPoints[i].x + sPoints[i].hy * outer * side, oy = sPoints[i].y - sPoints[i].hx * outer * side;
+			float ix = sPoints[i].x + sPoints[i].hy * inner * side, iy = sPoints[i].y - sPoints[i].hx * inner * side;
+			BlendRect(ox - 5, oy - 5, ox + 5, oy + 5, xDrawStart, yDrawStart, zoom, PixelRGB(70, 70, 68), 255);
+			BlendRect(ix - 3, iy - 3, ix + 3, iy + 3, xDrawStart, yDrawStart, zoom, PixelRGB(220, 220, 214), 255);
 		}
 	}
 }
