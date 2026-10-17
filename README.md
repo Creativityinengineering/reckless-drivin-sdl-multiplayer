@@ -238,11 +238,10 @@ to finish (red), with its bridges.
 </p>
 
 <p align="center">
-  <img src="screenshots/generator-lanes.jpg" width="32%" alt="A generated highway with lanes and heavy traffic">
-  <img src="screenshots/generator-bridge.jpg" width="32%" alt="A generated road crossing itself on a bridge">
-  <img src="screenshots/generator-ice.jpg" width="32%" alt="A twisty generated ice road">
+  <img src="screenshots/generator-lanes.jpg" width="49%" alt="A generated highway with lanes and heavy traffic">
+  <img src="screenshots/generator-ice.jpg" width="49%" alt="A twisty generated ice road">
   <br>
-  <em>Lanes and heavy traffic, a road crossing itself on a bridge, a twisty ice road</em>
+  <em>Lanes and heavy traffic, a twisty ice road</em>
 </p>
 
 | Setting | Choices |
@@ -271,6 +270,14 @@ before crossings existed still give the same levels.
 **On a LAN** the host's levels are used by everyone: the host sends its code,
 each computer builds the level itself, and the lobby shows the code so
 everybody can note it down.
+
+<p align="center">
+  <img src="screenshots/bridge-countryside.jpg" width="32%" alt="A generated road crossing itself on a bridge in the countryside, with traffic on the bridge and on the road underneath">
+  <img src="screenshots/bridge-dirt.jpg" width="32%" alt="A dirt track passing under its own concrete bridge">
+  <img src="screenshots/bridge-mountain.jpg" width="32%" alt="Traffic on a bridge over the road below in the mountains">
+  <br>
+  <em>Crossings: the road loops round and passes over itself; cars below and on the bridge do not touch</em>
+</p>
 
 **Crossings.** With crossings the road is no longer one road per height, the
 way the original engine draws levels: it runs in any direction and passes
