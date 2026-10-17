@@ -241,7 +241,9 @@ int DrawComplCount()
 	}
 	if(finishDelay>=kStartBonusDelay)
 	{
-		float bonusPerc=(finishDelay-kStartBonusDelay)/countTime;
+		/* With the clock run out there is no time left to count: done at once
+		   (dividing by the zero count time made the bonus and score NaN). */
+		float bonusPerc=countTime>0?(finishDelay-kStartBonusDelay)/countTime:1;
 		if(bonusPerc>1)bonusPerc=1;
 		if(isLocal&&bonus*bonusPerc*kCountNoiseSpeed>gCurPlayer->bonusCount)
 		{
