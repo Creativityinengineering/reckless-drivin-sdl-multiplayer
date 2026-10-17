@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "compat.h"
 #include <math.h>
 #include <stdio.h>
@@ -337,6 +338,277 @@ static void NumToPStr(int num, Str31 pstr)
 	memcpy(pstr+1, tmp, len);
 }
 
+/* The cockpit images are 120 rows but drawn 121 up (the displays are placed
+   for that), so a strip of the level showed below. Drawn a row lower first,
+   the bottom row is the image's own. */
+static void DrawCockpit(int id)
+{
+	DrawRLE(0,SCREEN_HEIGHT-kPanelHeight+1,id);
+	DrawRLE(0,SCREEN_HEIGHT-kPanelHeight,id);
+}
+
+/* Extended mode: the cockpit's red add-on display grows to the left and
+   upwards into one bigger display; its new top row shows the timed crates
+   (and the shield) as red pictures like the original add-ons, blinking in
+   the last seconds. A wrecked car shows the original broken cockpit. */
+#define kArsenalX	296	/* the bigger display's brass frame */
+#define kArsenalY	424
+#define kArsenalW	146
+#define kArsenalSlots	7
+#define kArsenalSlotW	19
+#define kCockpitBrass	0x24E3	/* the cockpit's frame, RGB555 */
+#define kCockpitBevel	0x45CA
+
+static const char *const kArsenalIcons[11][12]={
+	{ /* nitro */
+		"....##......",
+		"...####.....",
+		"....##......",
+		"...####.....",
+		"..######....",
+		"..#+##+#....",
+		"..#+##+#....",
+		"..######....",
+		"..######....",
+		"..######....",
+		"...####.....",
+		"............",
+	},
+	{ /* grip */
+		"....####....",
+		"..##+##+##..",
+		".#+#....#+#.",
+		".##......##.",
+		"#+#......#+#",
+		"##........##",
+		"##........##",
+		"#+#......#+#",
+		".##......##.",
+		".#+#....#+#.",
+		"..##+##+##..",
+		"....####....",
+	},
+	{ /* offroad */
+		"............",
+		"............",
+		"......#.....",
+		".....###....",
+		"....##+##...",
+		"...##+++##..",
+		"..##+#+#+##.",
+		".##+##+##+##",
+		"############",
+		"############",
+		"............",
+		"............",
+	},
+	{ /* magnet */
+		"............",
+		".###....###.",
+		".###....###.",
+		".+++....+++.",
+		".###....###.",
+		".###....###.",
+		".###....###.",
+		".####..####.",
+		"..########..",
+		"...######...",
+		"............",
+		"............",
+	},
+	{ /* shield */
+		".##########.",
+		".#++++++++#.",
+		".#+######+#.",
+		".#+######+#.",
+		".#+######+#.",
+		".#+######+#.",
+		"..#+####+#..",
+		"..#+####+#..",
+		"...#+##+#...",
+		"....#++#....",
+		".....##.....",
+		"............",
+	},
+	{ /* ram */
+		"............",
+		"......#.....",
+		"......##....",
+		"#######+#...",
+		"#######++#..",
+		"#######+++#.",
+		"#######++#..",
+		"#######+#...",
+		"......##....",
+		"......#.....",
+		"............",
+		"............",
+	},
+	{ /* oil */
+		".....#......",
+		".....##.....",
+		"....###.....",
+		"....####....",
+		"...#####+...",
+		"..######+#..",
+		"..#####++#..",
+		"..####+++#..",
+		"..###+++##..",
+		"...#####....",
+		"....###.....",
+		"............",
+	},
+	{ /* rain */
+		"....####....",
+		"..########..",
+		".##########.",
+		"############",
+		".##########.",
+		"............",
+		"..+...+...+.",
+		".#...#...#..",
+		"............",
+		"...+...+...+",
+		"..#...#...#.",
+		"............",
+	},
+	{ /* zombie */
+		"...######...",
+		"..########..",
+		".##########.",
+		".#...##...#.",
+		".#...##...#.",
+		".##########.",
+		"..###..###..",
+		"...######...",
+		"...#+##+#...",
+		"...######...",
+		"............",
+		"............",
+	},
+	{ /* war */
+		"#....#....#.",
+		".#...#...#..",
+		"..#.###.#...",
+		"...#####....",
+		".#########..",
+		"###########.",
+		".#########..",
+		"...#####....",
+		"..#.###.#...",
+		".#...#...#..",
+		"#....#....#.",
+		"............",
+	},
+	{ /* clear */
+		"............",
+		"............",
+		"...#....#...",
+		"..##....##..",
+		".###....###.",
+		"####....####",
+		".###....###.",
+		"..##....##..",
+		"...#....#...",
+		"............",
+		"............",
+		"............",
+	},
+};
+
+/* A filled rectangle (640x480 units) whose top corners are rounded with
+   radius r, smoothed at full render resolution. */
+static void FillRoundedTop(tPixel *fb,int stride,int x,int y,int w,int h,int r,UInt16 color)
+{
+	int scale=Platform_GetRenderScale(),px,py;
+	int x0=x*scale,y0=y*scale,x1=(x+w)*scale,y1=(y+h)*scale;
+	float radius=(float)(r*scale);
+	tPixel pixel=Pixel555(color);
+	for(py=y0;py<y1&&py<gYSize;py++)
+	{
+		float dy=radius-(py-y0)-0.5f;
+		tPixel *row=fb+py*stride;
+		if(py<0)
+			continue;
+		for(px=x0;px<x1&&px<gXSize;px++)
+		{
+			float dx=0,coverage;
+			if(px<0)
+				continue;
+			if(px-x0<radius)
+				dx=radius-(px-x0)-0.5f;
+			else if(x1-1-px<radius)
+				dx=radius-(x1-1-px)-0.5f;
+			if(dy<=0||dx<=0)
+			{
+				row[px]=pixel;
+				continue;
+			}
+			coverage=radius+0.5f-sqrtf(dx*dx+dy*dy);
+			if(coverage>=1)
+				row[px]=pixel;
+			else if(coverage>0)
+				row[px]=BlendAlpha(pixel,row[px],(UInt32)(coverage*255));
+		}
+	}
+}
+
+static void DrawArsenalIcon(tPixel *fb,int stride,int x,int y,int icon,int dim)
+{
+	int row,col;
+	for(row=0;row<12;row++)
+		for(col=0;col<12;col++)
+		{
+			char c=kArsenalIcons[icon][row][col];
+			if(c=='#')
+				TR_FillRect(fb,stride,x+col,y+row,1,1,dim?0x2000:0x6C00);
+			else if(c=='+')
+				TR_FillRect(fb,stride,x+col,y+row,1,1,dim?0x1000:0x3800);
+		}
+}
+
+static void DrawArsenal(void)
+{
+	tPlayer *p=gCurPlayer;
+	float timeLeft[11];
+	int rowBytes,stride,i,shown=0;
+	tPixel *fb;
+	if(!Prefs_IsExtendedMode())
+		return;
+	fb=Platform_GetFramebuffer(&rowBytes);
+	stride=rowBytes/4;
+	/* Frame and black glass around the original display, whose inside
+	   (x 306-431, y 456-475) with its own pictures stays as it is. */
+	FillRoundedTop(fb,stride,kArsenalX,kArsenalY,kArsenalW,32,7,kCockpitBrass);
+	TR_FillRect(fb,stride,kArsenalX+7,kArsenalY,kArsenalW-14,1,kCockpitBevel);
+	/* Frame and black glass around the original display, whose inside
+	   (x 306-431, y 456-475) with its own pictures stays as it is. */
+	TR_FillRect(fb,stride,kArsenalX,kArsenalY+32,10,22,kCockpitBrass);
+	TR_FillRect(fb,stride,kArsenalX+136,kArsenalY+32,10,22,kCockpitBrass);
+	FillRoundedTop(fb,stride,kArsenalX+4,kArsenalY+4,kArsenalW-8,28,4,COL_BLACK);
+	TR_FillRect(fb,stride,kArsenalX+4,kArsenalY+32,12,20,COL_BLACK);
+	TR_FillRect(fb,stride,kArsenalX+136,kArsenalY+32,6,20,COL_BLACK);
+	timeLeft[0]=p->nitroTime;
+	timeLeft[1]=p->gripTime;
+	timeLeft[2]=p->offroadTime;
+	timeLeft[3]=p->magnetTime;
+	timeLeft[4]=p->shield?99:p->shieldGrace;
+	timeLeft[5]=p->ramTime;
+	timeLeft[6]=p->oilTime;
+	timeLeft[7]=p->rainTime;
+	timeLeft[8]=p->zombieTime;
+	timeLeft[9]=p->warTime;
+	timeLeft[10]=p->dodgeTime;
+	for(i=0;i<11&&shown<kArsenalSlots;i++)
+	{
+		if(timeLeft[i]<=0)
+			continue;
+		DrawArsenalIcon(fb,stride,kArsenalX+8+shown*kArsenalSlotW,kArsenalY+8,i,
+			timeLeft[i]<3&&(gFrameCount/8)&1);
+		shown++;
+	}
+}
+
 void DrawDisplays()
 {
 	int i;
@@ -349,7 +621,7 @@ void DrawDisplays()
 		veloDisplay=-PI/2+VEC2D_DotProduct(gCameraObj->velo,P2D(sin(gCameraObj->dir),cos(gCameraObj->dir)))*PI/kMaxDisplayVelo;
 	else
 		veloDisplay=-PI/2+gCameraObj->input.throttle*PI;
-	DrawRLE(0,SCREEN_HEIGHT-kPanelHeight,148);
+	DrawCockpit(148);
 	DrawSprite(189,148*Platform_GetRenderScale(),
 		(SCREEN_HEIGHT-14)*Platform_GetRenderScale(),veloDisplay,1);
 	DrawNum(kScoreX,SCREEN_HEIGHT-kScoreY,gCurPlayer->displayScore,6);
@@ -357,6 +629,7 @@ void DrawDisplays()
 	DrawNum(kTimeX+kTimeMinuteOffs,SCREEN_HEIGHT-kTimeY,floor(timeDisp)/60,2);
 	DrawNumZeroed(kTimeX,SCREEN_HEIGHT-kTimeY,(int)floor(timeDisp)%60,2);
 	DrawNum(kTimeX+kTimeDecimalOffs,SCREEN_HEIGHT-kTimeY,(int)floor(timeDisp*10),1);
+	DrawArsenal();
 	for(i=0;i<6;i++)
 		if(gCurPlayer->addOns&1<<i)
 			DrawRLE(kAddOnX+20*i,SCREEN_HEIGHT-kAddOnY,142+i);
@@ -367,9 +640,11 @@ void DrawDisplays()
 			tPixel *fb = Platform_GetFramebuffer(&rowBytes);
 			int stride = rowBytes/4;
 			int width = TR_StringWidth(playerName, 1);
-			TR_FillRect(fb, stride, SCREEN_WIDTH - width - 20, 8,
+			/* below the missile and mine counters */
+			int y = 8 + ((gCurPlayer->missiles != 0) + (gCurPlayer->mines != 0)) * 25;
+			TR_FillRect(fb, stride, SCREEN_WIDTH - width - 20, y,
 				width + 12, 20, COL_DKGRAY);
-			TR_DrawStringRight(fb, stride, SCREEN_WIDTH - 10, 14,
+			TR_DrawStringRight(fb, stride, SCREEN_WIDTH - 10, y + 6,
 				playerName, COL_WHITE, 1);
 		}
 		DrawRacePosition();
@@ -403,7 +678,7 @@ int DrawPanel()
 		if(gCurPlayer->finishDelay)
 			return DrawComplCount();
 		else if(gCurPlayer->deathDelay)
-			DrawRLE(0,SCREEN_HEIGHT-kPanelHeight,150);
+			DrawCockpit(150);	/* the wrecked cockpit as it was, without the bigger display */
 		else
 			DrawDisplays();
 	return true;
@@ -948,6 +1223,7 @@ static void DrawNameTags(float xDrawStart,float yDrawStart,float zoom)
 {
 	tPixel *fb=(tPixel*)gBaseAddr;
 	int stride=gRowBytes/4,slot,scale=Platform_GetRenderScale();
+	int placed=0,placedX[kNetworkMaxPlayers],placedY[kNetworkMaxPlayers],placedW[kNetworkMaxPlayers];
 	if(!Network_IsActive()||Network_GetPlayerCount()<2)
 		return;
 	for(slot=0;slot<kNetworkMaxPlayers;slot++)
@@ -960,8 +1236,22 @@ static void DrawNameTags(float xDrawStart,float yDrawStart,float zoom)
 		x=(int)((car->pos.x-xDrawStart)/zoom/scale);
 		y=(int)((yDrawStart-car->pos.y)/zoom/scale-(*car->type).length*kScale*0.6f/zoom/scale)-12;
 		width=TR_StringWidth(name,1);
+		{
+			/* Cars close together: stack their tags instead of overlapping. */
+			int i,moved=1;
+			while(moved)
+				for(moved=0,i=0;i<placed;i++)
+					if(abs(placedX[i]-x)*2<placedW[i]+width+4&&abs(placedY[i]-y)<12)
+					{
+						y=placedY[i]-12;
+						moved=1;
+					}
+		}
 		if(x<-width||x>SCREEN_WIDTH+width||y<-10||y>SCREEN_HEIGHT)
 			continue;
+		placedX[placed]=x;
+		placedY[placed]=y;
+		placedW[placed++]=width;
 		TR_FillRect(fb,stride,x-width/2-2,y-2,width+4,12,COL_BLACK);
 		TR_DrawStringCentered(fb,stride,x,y,name,COL_WHITE,1);
 	}
@@ -1014,14 +1304,18 @@ void RenderFrame()
 	}
 	DrawParticleFXZoomed(xDrawStart,yDrawStart,zoom,0);
 	DrawSpritesZoomed(xDrawStart,yDrawStart,zoom);
+	/* Everything from here on stays in front of the GPU-drawn AI sprites. */
+	Platform_BeginForeground(0);
 	DrawShieldRings(xDrawStart,yDrawStart,zoom);
 	DrawNameTags(xDrawStart,yDrawStart,zoom);
 	DrawParticleFXZoomed(xDrawStart,yDrawStart,zoom,1);
 	DrawRain();
 	DrawTextFXZoomed(xDrawStart,yDrawStart,zoom);
-	if(DrawPanel())
+	if(DrawPanel()){
+		Platform_EndForeground();
 		if(preSpecBlit!=gScreenBlitSpecial)
 			RenderFrame();
 		else
 			Blit2Screen();
+	}
 }

@@ -299,7 +299,13 @@ void InsertObjectGroup(tObjectGroupReference groupRef)
 		tObject *theObj=NewObject(gFirstObj,(*group).data[probIndex].typeRes);
 		theObj->pos=P2D(INFINITY,INFINITY);
 		theObj->dir=(*group).data[probIndex].dir;
-		theObj->pos=GetUniquePos((*group).data[probIndex].minOffs,(*group).data[probIndex].maxOffs,&theObj->dir,&control);
+		{
+			/* A crowded road has no spaced-out spot left: the last try's
+			   place will do rather than searching forever. */
+			int found;
+			theObj->pos=GetUniquePosLimited((*group).data[probIndex].minOffs,(*group).data[probIndex].maxOffs,
+				&theObj->dir,&control,5000,&found);
+		}
 		theObj->control+=control;
 		if((theObj->control&0x0000000f)==kObjectDriveUp)
 			for(theObj->target=0;

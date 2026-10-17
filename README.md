@@ -16,6 +16,10 @@
 
 ---
 
+<img src="screenshots/multiplayer.gif" width="800" alt="Animated: four drivers racing in split screen on level 1 with an oil slick, clear road, nitro and super grip">
+
+*Multiplayer Edition: four drivers in split screen, up to ten on a LAN*
+
 <img src="screenshots/start-screen.jpg" width="720" alt="Reckless Drivin' start screen with the license-plate menu">
 
 *640x480 software-rendered, pixel-perfect; just like it was in 2000*
@@ -89,6 +93,13 @@ modes, new crates and wilder traffic on top of the original game. Single
 player stays as it was; the original traffic and add-ons are one setting away
 (**Game Mode: ORIGINAL** in Preferences).
 
+<p align="center">
+  <img src="screenshots/multiplayer-split-screen.jpg" width="49%" alt="Four drivers in split screen on level 1: a cop swarm, zombie cars, car war and a battering ram at once">
+  <img src="screenshots/multiplayer-pileup.jpg" width="49%" alt="Police cars and a school bus piling up behind the drivers, with explosions">
+  <br>
+  <em>Turbo Granny, Sir Honkalot, Crash Bandit and Leadfoot Larry on level 1: one crate each, then chaos</em>
+</p>
+
 ### What's new
 
 - **Local and LAN multiplayer:** up to four drivers in split screen on one
@@ -96,6 +107,11 @@ player stays as it was; the original traffic and add-ons are one setting away
   with their own car, controls, lives, score and finish result
 - **Driver names:** type your name in the LAN lobby (**N**); the others see it
   in their lobby and over your car during the race
+- **Bigger add-on display (Extended mode):** the cockpit's red add-on display
+  grows by a row; the timed crates show there as red pictures like the
+  original add-ons, blinking when they run out
+- **Cops stay in the game:** a driver the police pushed off the road comes
+  back with a moment of shield; the cops drive on instead of vanishing
 - **Start level:** choose the level a multiplayer game starts in (**LEVEL**
   button or **+/-** in the multiplayer menu); on a LAN the host's choice counts
 - **Own sound for every driver:** in split screen each driver has their own

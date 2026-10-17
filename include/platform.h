@@ -54,6 +54,10 @@ int Platform_IsKeyDown(int scancode);
  * WasKeyTyped: press or OS auto-repeat; for hold-to-scroll navigation. */
 int Platform_WasKeyPressed(int scancode);
 /* Typed text (printable ASCII) while text entry is on, consumed on read. */
+/* Around drawing what belongs in front of the GPU-drawn AI sprites (effects,
+   texts, cockpit): rows from logicalY down. */
+void Platform_BeginForeground(int logicalY);
+void Platform_EndForeground(void);
 void Platform_StartTextEntry(void);
 void Platform_StopTextEntry(void);
 int Platform_TakeTypedText(char *text, int capacity);

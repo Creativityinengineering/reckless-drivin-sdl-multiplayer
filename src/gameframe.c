@@ -119,6 +119,10 @@ static inline void CheckTimeSkip()
 }
 
 t2DPoint GetUniquePos(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir);
+t2DPoint GetUniquePosLimited(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir,
+	int maxTries,int *found);
+
+#define kRespawnGrace 2.5f
 
 void CopClear()
 {
@@ -127,12 +131,23 @@ void CopClear()
 	{
 		if(theObj!=gPlayerObj&&theObj->type->flags&kObjectCop)
 		{
-			int tries=0;
-			/* Bounded: near the level end there may be no spot far enough away. */
-			while(fabs(theObj->pos.y-gPlayerObj->pos.y)<kMinCopDist&&tries++<50)
+			int tries=0,found=1;
+			/* Bounded: near the level end there may be no spot far enough
+			   away, and with many cars on the road no free spot at all (the
+			   search used to run forever then); the cop then stays. */
+			while(fabs(theObj->pos.y-gPlayerObj->pos.y)<kMinCopDist&&tries++<50&&found)
 			{
+				t2DPoint oldPos=theObj->pos;
+				float oldDir=theObj->dir;
+				int oldControl=theObj->control;
 				theObj->dir=-1;
-				theObj->pos=GetUniquePos(20,200,&theObj->dir,&theObj->control);
+				theObj->pos=GetUniquePosLimited(20,200,&theObj->dir,&theObj->control,200,&found);
+				if(!found)
+				{
+					theObj->pos=oldPos;
+					theObj->dir=oldDir;
+					theObj->control=oldControl;
+				}
 			}
 		}
 		theObj=(tObject*)theObj->next;
@@ -191,7 +206,16 @@ void ResurrectPlayer()
 	gScreenBlitSpecial=true;
 	gCurPlayer->zoomVelo=kMaxZoomVelo;
 	gGameTime+=kPenaltyTime;
-	CopClear();
+	/* Alone, cops near the wreck are moved away. With others watching
+	   they drive on (else they vanish before everyone's eyes); the driver
+	   is safe for a moment instead (the blinking shield ring). */
+	if(Network_IsActive()&&Network_GetPlayerCount()>1)
+	{
+		if(gCurPlayer->shieldGrace<kRespawnGrace)
+			gCurPlayer->shieldGrace=kRespawnGrace;
+	}
+	else
+		CopClear();
 }
 
 

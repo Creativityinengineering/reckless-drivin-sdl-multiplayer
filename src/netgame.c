@@ -3146,7 +3146,11 @@ static void ProcessHostPacket(const tNetworkPacket *packet, const struct sockadd
 		sPeers[slot].used = 0;
 		memset(&sPlayers[slot], 0, sizeof(sPlayers[slot]));
 		fprintf(stderr, "[network] Player left slot %d\n", slot + 1);
-	} else if (packet->type == kPacketState && packet->players[slot].active) {
+	} else if (packet->type == kPacketState && packet->players[slot].active &&
+		packet->level == (UInt8)gLevelID) {
+		/* A late state from the level before (still "finished") would
+		   otherwise come back to the client and keep it finished in the
+		   new level for good. */
 		sPlayers[slot] = packet->players[slot];
 		sPlayers[slot].active = 1;
 		sSnapshotMS[slot] = NetworkTimeMS();
@@ -3346,6 +3350,7 @@ void Network_Publish(void)
 		InitializePacket(&packet, kPacketState);
 		packet.slot = (UInt8)sLocalSlot;
 		packet.started = (UInt8)sStarted;
+		packet.level = (UInt8)gLevelID;	/* the host drops states from another level */
 		packet.playerCount = 1;
 		packet.players[sLocalSlot] = sPlayers[sLocalSlot];
 		SendPacket(&sServerAddress, &packet);

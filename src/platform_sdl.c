@@ -183,6 +183,7 @@ static UInt8 sFadeBrightness = 255;
 /* Forward declaration — defined in input subsystem section below */
 static int sQuitRequested;
 static void RenderAIDetailSprites(const SDL_Rect *viewport);
+static void RenderForeground(const SDL_Rect *viewport);
 
 /* Time spent inside SDL_RenderPresent (mostly vsync wait), for frame stats. */
 static UInt64 sPresentMicros;
@@ -260,6 +261,7 @@ void Platform_Blit2Screen(void)
         if (SDL_RenderCopy(sRenderer, sTexture, NULL, &dst) < 0)
             fprintf(stderr, "[platform] SDL_RenderCopy failed: %s\n", SDL_GetError());
         RenderAIDetailSprites(&dst);
+        RenderForeground(&dst);
         sMultiViewIndex++;
         if (sMultiViewIndex >= sMultiViewCount) {
             PresentFrame();
@@ -433,6 +435,108 @@ void Platform_QueueAIDetailSprite(int id, float centerX, float centerY,
     };
 }
 
+/* Cockpit, name tags, smoke and texts over the AI sprites: the GPU draws
+   those after the software frame, so whatever the frame drew after its
+   sprites is drawn once more on top of them. Only the pixels changed since
+   Platform_BeginForeground are opaque in this layer. */
+static tPixel *sForegroundSave;
+static SDL_Texture *sForegroundTexture;
+static int sForegroundW, sForegroundH, sForegroundY, sForegroundState;
+
+static int AIDetailReaches(int y)
+{
+    int i;
+    for (i = 0; i < sAIDetailDrawCount; ++i) {
+        const tAIDetailDraw *draw = &sAIDetailDraws[i];
+        SDL_Texture *sprite = sAIDetailTextures[draw->spriteIndex];
+        int width, height;
+        float reach;
+        if (!sprite)
+            continue;
+        SDL_QueryTexture(sprite, NULL, NULL, &width, &height);
+        reach = (width > height ? width : height) * draw->zoom / 4.0f * 0.75f;
+        if (draw->centerY + reach >= y)
+            return 1;
+    }
+    return 0;
+}
+
+void Platform_BeginForeground(int logicalY)
+{
+    int y = logicalY * sRenderScale;
+    size_t pixels;
+    sForegroundState = 0;
+    if (!sUpscaleMode || sRenderScale > 1 || y < 0 || y >= sRenderHeight ||
+        !AIDetailReaches(y))
+        return;
+    pixels = (size_t)sRenderWidth * (size_t)(sRenderHeight - y);
+    if (!sForegroundSave)
+        sForegroundSave = (tPixel *)malloc((size_t)sRenderWidth * sRenderHeight * sizeof(tPixel));
+    if (!sForegroundSave)
+        return;
+    memcpy(sForegroundSave, sFramebuffer + (size_t)y * sRenderWidth, pixels * sizeof(tPixel));
+    sForegroundY = y;
+    sForegroundState = 1;
+}
+
+void Platform_EndForeground(void)
+{
+    void *texPixels;
+    int texPitch, x, y;
+    SDL_Rect rows;
+    if (sForegroundState != 1)
+        return;
+    sForegroundState = 0;
+    if (sForegroundTexture && (sForegroundW != sRenderWidth || sForegroundH != sRenderHeight)) {
+        SDL_DestroyTexture(sForegroundTexture);
+        sForegroundTexture = NULL;
+    }
+    if (!sForegroundTexture) {
+        sForegroundTexture = SDL_CreateTexture(sRenderer, SDL_PIXELFORMAT_ARGB8888,
+            SDL_TEXTUREACCESS_STREAMING, sRenderWidth, sRenderHeight);
+        if (!sForegroundTexture)
+            return;
+        SDL_SetTextureBlendMode(sForegroundTexture, SDL_BLENDMODE_BLEND);
+        sForegroundW = sRenderWidth;
+        sForegroundH = sRenderHeight;
+    }
+    rows.x = 0;
+    rows.y = sForegroundY;
+    rows.w = sRenderWidth;
+    rows.h = sRenderHeight - sForegroundY;
+    if (SDL_LockTexture(sForegroundTexture, &rows, &texPixels, &texPitch) != 0)
+        return;
+    for (y = 0; y < rows.h; ++y) {
+        const tPixel *now = sFramebuffer + (size_t)(sForegroundY + y) * sRenderWidth;
+        const tPixel *before = sForegroundSave + (size_t)y * sRenderWidth;
+        UInt32 *out = (UInt32 *)((UInt8 *)texPixels + (size_t)y * texPitch);
+        for (x = 0; x < sRenderWidth; ++x)
+            out[x] = now[x] != before[x] ? (now[x] | 0xFF000000u) : 0;
+    }
+    SDL_UnlockTexture(sForegroundTexture);
+    sForegroundState = 2;
+}
+
+static void RenderForeground(const SDL_Rect *viewport)
+{
+    SDL_Rect source, target;
+    float scale;
+    if (sForegroundState != 2)
+        return;
+    sForegroundState = 0;
+    scale = (float)viewport->h / sRenderHeight;
+    source.x = 0;
+    source.y = sForegroundY;
+    source.w = sRenderWidth;
+    source.h = sRenderHeight - sForegroundY;
+    target.x = viewport->x;
+    target.y = viewport->y + (int)(sForegroundY * scale + 0.5f);
+    target.w = viewport->w;
+    target.h = viewport->y + viewport->h - target.y;
+    SDL_SetTextureColorMod(sForegroundTexture, sFadeBrightness, sFadeBrightness, sFadeBrightness);
+    SDL_RenderCopy(sRenderer, sForegroundTexture, &source, &target);
+}
+
 static void RenderAIDetailSprites(const SDL_Rect *viewport)
 {
     float scale = (float)viewport->w / sRenderWidth;
@@ -485,6 +589,7 @@ void Platform_ScaleToFitWindow(void)
 
     SDL_RenderCopy(sRenderer, sTexture, NULL, &dst);
     RenderAIDetailSprites(&dst);
+        RenderForeground(&dst);
     PresentFrame();
 }
 
