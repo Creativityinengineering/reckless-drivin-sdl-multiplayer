@@ -700,9 +700,19 @@ static void StepStartLevel(int step)
 	WritePrefs(0);
 }
 
+/* The way of playing chosen last (local, host, join): preselected, so after
+   a game Enter plays the same again. */
+static int sLastMultiplayerChoice;
+static int sReturnToMultiplayer;
+
+void Interface_ReturnToMultiplayer(void)
+{
+	sReturnToMultiplayer = 1;
+}
+
 static int ChooseMultiplayerMode(void)
 {
-	int selected = 0;
+	int selected = sLastMultiplayerChoice;
 	DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
 	for (;;) {
 		int x, y;
@@ -1371,6 +1381,44 @@ static void DrawAddressPrompt(const char *address)
 	Platform_Blit2Screen();
 }
 
+/* The host address typed last, kept in the preferences folder. */
+static const char *LastHostPath(void)
+{
+	static char path[600];
+	char *prefDir = SDL_GetPrefPath("DarrCoh", "RecklessDrivin");
+	if (!prefDir)
+		return NULL;
+	snprintf(path, sizeof(path), "%sLastHost", prefDir);
+	SDL_free(prefDir);
+	return path;
+}
+
+static void LoadLastHost(char *address, size_t capacity)
+{
+	const char *path = LastHostPath();
+	FILE *file = path ? fopen(path, "r") : NULL;
+	size_t length;
+	address[0] = '\0';
+	if (!file)
+		return;
+	if (fgets(address, (int)capacity, file)) {
+		/* only digits and dots, as typed */
+		length = strspn(address, "0123456789.");
+		address[length] = '\0';
+	}
+	fclose(file);
+}
+
+static void SaveLastHost(const char *address)
+{
+	const char *path = LastHostPath();
+	FILE *file = path ? fopen(path, "w") : NULL;
+	if (!file)
+		return;
+	fprintf(file, "%s\n", address);
+	fclose(file);
+}
+
 static int EnterServerAddress(char *address, size_t capacity)
 {
 	static const SDL_Scancode digitKeys[] = {
@@ -1379,8 +1427,9 @@ static int EnterServerAddress(char *address, size_t capacity)
 		SDL_SCANCODE_6, SDL_SCANCODE_7, SDL_SCANCODE_8,
 		SDL_SCANCODE_9
 	};
-	size_t length = 0;
-	address[0] = '\0';
+	size_t length;
+	LoadLastHost(address, capacity);
+	length = strlen(address);
 	DrawAddressPrompt(address);
 	for (;;) {
 		int digit;
@@ -1392,8 +1441,11 @@ static int EnterServerAddress(char *address, size_t capacity)
 		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
 			return 0;
 		if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
-			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER))
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER)) {
+			if (length)
+				SaveLastHost(address);
 			return length != 0;
+		}
 		if (Platform_WasKeyPressed(SDL_SCANCODE_BACKSPACE) && length) {
 			address[--length] = '\0';
 			DrawAddressPrompt(address);
@@ -1416,9 +1468,53 @@ static int EnterServerAddress(char *address, size_t capacity)
 	}
 }
 
+/* The last LAN game: after a game over the host hosts it again and the
+   others join the same host again, everyone back in the lobby. */
+static int sLastHostPlayers;
+static char sLastJoinAddress[16];
+
+static void HostLanGame(int targetPlayers, int shiftHeld)
+{
+	int ready;
+	if (!Network_InitHost(kMultiplayerPort)) {
+		RestoreMenuScreen();
+		return;
+	}
+	sLastHostPlayers = targetPlayers;
+	Network_SetLobbyPlayerLimit(targetPlayers);
+	ready = WaitForLanPlayers(targetPlayers);
+	StopNameEdit();
+	if (ready) {
+		gStartLevel = Prefs_GetStartLevel();
+		StartGame(shiftHeld);
+		gStartLevel = 0;
+	} else {
+		Network_Shutdown();
+		RestoreMenuScreen();
+	}
+}
+
+static void JoinLanGame(const char *address)
+{
+	int joined;
+	if (!Network_InitClient(address, kMultiplayerPort)) {
+		RestoreMenuScreen();
+		return;
+	}
+	snprintf(sLastJoinAddress, sizeof(sLastJoinAddress), "%s", address);
+	joined = WaitInClientLobby(address);
+	StopNameEdit();
+	if (!joined) {
+		Network_Shutdown();
+		RestoreMenuScreen();
+	}
+}
+
 static void StartMultiplayer(int shiftHeld)
 {
 	int mode = ChooseMultiplayerMode();
+	if (mode >= 0)
+		sLastMultiplayerChoice = mode;
 	if (mode < 0) {
 		RestoreMenuScreen();
 		return;
@@ -1440,22 +1536,7 @@ static void StartMultiplayer(int shiftHeld)
 			RestoreMenuScreen();
 			return;
 		}
-		if (!Network_InitHost(kMultiplayerPort)) {
-			RestoreMenuScreen();
-			return;
-		}
-		Network_SetLobbyPlayerLimit(targetPlayers);
-		int ready = WaitForLanPlayers(targetPlayers);
-		StopNameEdit();
-		if (ready) {
-			gStartLevel = Prefs_GetStartLevel();
-			StartGame(shiftHeld);
-			gStartLevel = 0;
-		}
-		else {
-			Network_Shutdown();
-			RestoreMenuScreen();
-		}
+		HostLanGame(targetPlayers, shiftHeld);
 		return;
 	}
 	{
@@ -1467,17 +1548,21 @@ static void StartMultiplayer(int shiftHeld)
 			RestoreMenuScreen();
 			return;
 		}
-		if (!Network_InitClient(address, kMultiplayerPort)) {
-			RestoreMenuScreen();
-			return;
-		}
-		int joined = WaitInClientLobby(address);
-		StopNameEdit();
-		if (!joined) {
-			Network_Shutdown();
-			RestoreMenuScreen();
-		}
+		JoinLanGame(address);
 	}
+}
+
+/* After a multiplayer game: the host hosts the same game again and waits in
+   the lobby, the others rejoin the same host; a local game goes back to the
+   multiplayer menu. */
+static void ReturnToMultiplayer(void)
+{
+	if (sLastMultiplayerChoice == 1 && sLastHostPlayers)
+		HostLanGame(sLastHostPlayers, 0);
+	else if (sLastMultiplayerChoice == 2 && sLastJoinAddress[0])
+		JoinLanGame(sLastJoinAddress);
+	else
+		StartMultiplayer(0);
 }
 
 /* ======================================================================== */
@@ -1925,6 +2010,12 @@ void Eventloop(void)
 {
 	Platform_PollEvents();
 	Platform_ShowCursor();
+	/* After a multiplayer game: straight back to it, not the main menu. */
+	if (sReturnToMultiplayer && !gExit) {
+		sReturnToMultiplayer = 0;
+		ReturnToMultiplayer();
+		return;
+	}
 
 	if(Platform_ShouldQuit())
 	{

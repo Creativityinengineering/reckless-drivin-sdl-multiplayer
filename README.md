@@ -141,7 +141,7 @@ original pixel graphics (and **HQ 4K Mode** off for a window). Turning **AI
 Rendering** on again brings the upscaled graphics back at any time. Builds
 without the `AIAssets/` folder simply show the original graphics.
 
-### LAN in five steps
+### LAN in six steps
 
 1. Start the game on every computer (same version on all of them).
 2. On one computer choose **MULTIPLAYER**, pick a mode with **M** or the
@@ -151,6 +151,9 @@ without the `AIAssets/` folder simply show the original graphics.
 4. Everyone picks a car in the lobby, types a name with **N** (and **V** for
    split or own screen).
 5. The host starts; the race begins on all computers with a countdown.
+6. After the game: the host hosts the same game again and the others rejoin
+   it by themselves, so everyone is back in the lobby (a local game returns
+   to the multiplayer menu). A typed host address is remembered.
 
 ### Game modes
 

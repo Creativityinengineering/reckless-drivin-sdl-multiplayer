@@ -15,5 +15,6 @@ void ScreenUpdate(void);
 void ShowPicScreen(int id);
 void ShowPicScreenNoFade(int id);
 void WaitForPress();
+void Interface_ReturnToMultiplayer(void);	/* after a multiplayer game */
 
 #endif

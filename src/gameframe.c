@@ -467,7 +467,9 @@ void PlayerHandling()
 		KillObject(gCurPlayer->brakeObj);
 		gCurPlayer->brakeObj=nil;
 	}
-	if((gPlayerObj->input.brake||gPlayerObj->input.reverse)&&!(*gRoadInfo).water&&!(gCurPlayer->deathDelay!=0)&&gCurPlayer->lives)
+	/* The brake light picture is a car's; a motorbike's is drawn on its own. */
+	if((gPlayerObj->input.brake||gPlayerObj->input.reverse)&&!(*gRoadInfo).water&&!(gCurPlayer->deathDelay!=0)&&gCurPlayer->lives&&
+		gPlayerObj->type->width>=1.0f)
 	{
 		gCurPlayer->brakeObj=NewObject(gPlayerObj,228);
 		if(gCurPlayer->brakeObj){

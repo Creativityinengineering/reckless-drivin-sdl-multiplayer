@@ -61,6 +61,7 @@ tObject *Network_GetLocalDriverObject(int index);
 int Network_IsPrimaryDriver(const tObject *object);
 int Network_IsDriverObject(const tObject *object);
 int Network_DriverIsFinished(const tObject *object);
+int Network_DriverLights(int slot);
 int Network_DriverIsEliminated(const tObject *object);
 void Network_MarkDriverFinished(tObject *object);
 void Network_MarkDriverEliminated(tObject *object);

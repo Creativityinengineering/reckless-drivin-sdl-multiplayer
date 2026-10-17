@@ -1099,6 +1099,18 @@ static int GetSlotForPlayer(const tObject *object)
 	return -1;
 }
 
+/* Brake (1) or reverse (2) lights of a driver's car, 0 for none: from the
+   own input, or as the driver's computer reported it. */
+int Network_DriverLights(int slot)
+{
+	const tObject *car;
+	if (slot < 0 || slot >= kNetworkMaxPlayers || !(car = gPlayers[slot].obj))
+		return 0;
+	if (!Network_IsActive() || sLocalTwoPlayer || slot == sLocalSlot)
+		return car->input.reverse ? 2 : car->input.brake ? 1 : 0;
+	return sPlayers[slot].reverse ? 2 : sPlayers[slot].brake ? 1 : 0;
+}
+
 int Network_DriverIsFinished(const tObject *object)
 {
 	int slot = GetSlotForPlayer(object);
@@ -2275,7 +2287,9 @@ static void RemoteDriverEffects(int slot, tObject *car)
 		RemoveObject(player->brakeObj);
 		player->brakeObj = NULL;
 	}
-	if ((state->brake || state->reverse) && alive && !gRoadInfo->water) {
+	/* (A motorbike's light is drawn on its own: the picture is a car's.) */
+	if ((state->brake || state->reverse) && alive && !gRoadInfo->water &&
+		car->type->width >= 1.0f) {
 		player->brakeObj = NewDriverExtra(car, 228);
 		if (player->brakeObj) {
 			if (state->reverse)

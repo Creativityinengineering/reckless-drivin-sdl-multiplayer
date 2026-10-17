@@ -1218,6 +1218,31 @@ static void DrawShieldRings(float xDrawStart,float yDrawStart,float zoom)
 	}
 }
 
+/* A motorbike's brake (red) or reverse (white) light: one small light in
+   the middle of its back, where the car picture would put two. */
+static void DrawBikeLights(float xDrawStart,float yDrawStart,float zoom)
+{
+	tPixel *fb=(tPixel*)gBaseAddr;
+	int stride=gRowBytes/4,slot,scale=Platform_GetRenderScale();
+	if((*gRoadInfo).water)
+		return;
+	for(slot=0;slot<kNetworkMaxPlayers;slot++)
+	{
+		tObject *car=gPlayers[slot].obj;
+		int lights,size=2*scale;
+		float back,x,y;
+		if(!car||car->type->width>=1.0f||(Network_IsActive()?!Network_IsSlotActive(slot):slot!=0))
+			continue;
+		if(gPlayers[slot].deathDelay||!gPlayers[slot].lives||!(lights=Network_DriverLights(slot)))
+			continue;
+		back=(*car->type).length*kScale*0.5f*(1+car->jumpHeight*0.18f);
+		x=(car->pos.x-sin(car->dir)*back-xDrawStart)/zoom;
+		y=(yDrawStart-(car->pos.y-cos(car->dir)*back))/zoom;
+		BlendDot(fb,stride,(int)x-size,(int)y-size,size*2,lights==2?PixelRGB(255,255,230):PixelRGB(255,30,20),140);
+		BlendDot(fb,stride,(int)x-size/2,(int)y-size/2,size,lights==2?PixelRGB(255,255,255):PixelRGB(255,80,60),255);
+	}
+}
+
 /* Multiplayer: the other drivers' names over their cars. */
 static void DrawNameTags(float xDrawStart,float yDrawStart,float zoom)
 {
@@ -1306,6 +1331,7 @@ void RenderFrame()
 	DrawSpritesZoomed(xDrawStart,yDrawStart,zoom);
 	/* Everything from here on stays in front of the GPU-drawn AI sprites. */
 	Platform_BeginForeground(0);
+	DrawBikeLights(xDrawStart,yDrawStart,zoom);
 	DrawShieldRings(xDrawStart,yDrawStart,zoom);
 	DrawNameTags(xDrawStart,yDrawStart,zoom);
 	DrawParticleFXZoomed(xDrawStart,yDrawStart,zoom,1);

@@ -719,6 +719,8 @@ void EndGame()
 			CheckHighScore(gCurPlayer->score);
 		}
 	}
+	if(Network_UsesCrateSettings())	/* started from the multiplayer menu */
+		Interface_ReturnToMultiplayer();
 	Network_EndLocalGame();
 	/* A LAN game ends here: close the session, so hosting or joining again
 	   starts afresh (an open socket kept the port and the old race). */
