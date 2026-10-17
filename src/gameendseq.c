@@ -52,7 +52,7 @@ static const CreditLine kCredits[] = {
 	{"2026",              2, COL_GRAY},
 	{"",                  1, COL_WHITE},
 	{"Split screen and LAN races for up to four drivers", 1, COL_WHITE},
-	{"Game modes: Co-op, Duel, Packages, Police and Zombie", 1, COL_WHITE},
+	{"Game modes: Co-op, Duel, Packages, Police, Zombie, Wildlife", 1, COL_WHITE},
 	{"Crates: Nitro, Shield, Magnet, Battering Ram, Oil Slick,", 1, COL_WHITE},
 	{"Super Grip, Offroad Tyres, Rain Maker, Zombie Cars,", 1, COL_WHITE},
 	{"Car War, Clear Road, Cop Swarm and Traffic Jam", 1, COL_WHITE},
