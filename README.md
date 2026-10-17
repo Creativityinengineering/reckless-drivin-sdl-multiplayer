@@ -485,6 +485,12 @@ no crash; not on water levels). More add-ons there:
   reach it, but stays on its carriageway instead of driving into the ditch. Pickup names appear small at the top of the view;
 quick pickups stack in rows.
 
+Points for destroyed cars are fair in multiplayer: they go to the driver who
+last hit the car (shot it, rammed it, or pushed it into the ditch) if it is
+destroyed within six seconds; cars wrecked without any driver involved score
+for nobody. On a LAN the host sends a driver the points for cars that were
+destroyed in its world.
+
 Ramming a cop makes it chase you (in multiplayer it switches to you even if
 it was after another driver); one that came the other way turns round.
 Ramming an ordinary car can also make it furious: instead of fleeing, it

@@ -47,7 +47,7 @@ typedef socklen_t NetworkSockLen;
 #endif
 
 #define kNetworkMagic 0x52444d50u
-#define kNetworkVersion 16
+#define kNetworkVersion 17
 #define kNetworkIntervalMS 50
 #define kNetworkTimeoutMS 10000
 
@@ -131,6 +131,8 @@ typedef struct {
 	tShotEvent shots[kShotHistory];
 	UInt8 swarmTarget, swarmSeq, jamTarget, jamSeq;
 	int fire, missile;
+	UInt8 awardSeq;	/* host: points for drivers on other computers */
+	struct { UInt8 seq, target; UInt16 amount; float x, y; } awards[8];
 	UInt8 killSeq;	/* client: host objects it destroyed */
 	tWorldKill kills[kKillHistory];
 	char name[16];
@@ -198,6 +200,7 @@ static UInt8 sSeenShotSeq[kNetworkMaxPlayers];
 static UInt8 sSeenSwarmSeq[kNetworkMaxPlayers];
 static UInt8 sSeenJamSeq[kNetworkMaxPlayers];
 static UInt8 sSeenKillSeq[kNetworkMaxPlayers];
+static UInt8 sSeenAwardSeq[kNetworkMaxPlayers];
 static tObject *sReplicas[65536];	/* client: by netId */
 static struct { UInt16 id; SInt16 typeRes; UInt64 timeMS; } sTombstones[kTombstones];
 static int sNextTombstone;
@@ -1132,6 +1135,7 @@ void Network_StartCampaign(void)
 	memset(sSeenSwarmSeq, 0, sizeof(sSeenSwarmSeq));
 	memset(sSeenJamSeq, 0, sizeof(sSeenJamSeq));
 	memset(sSeenKillSeq, 0, sizeof(sSeenKillSeq));
+	memset(sSeenAwardSeq, 0, sizeof(sSeenAwardSeq));
 }
 
 int Network_UpdateRaceProgress(void)
@@ -1942,20 +1946,86 @@ void Network_KillDriver(tObject *object)
    nobody when the weapon is a replay of a remote driver's shot. */
 void Network_KillObjectFor(tObject *victim, tObject *killer)
 {
-	int slot = GetSlotForPlayer(killer), previous;
+	int slot = GetSlotForPlayer(killer);
 	if (slot < 0 || !sPlayers[slot].active) {
+		victim->lastHitSlot = 0;	/* a cop's weapon: points for nobody */
 		KillObject(victim);
 		return;
 	}
+	victim->lastHitSlot = (UInt8)(slot + 1);
+	victim->lastHitFrame = (UInt32)gFrameCount;
 	if (!IsLocalSlot(slot)) {
+		/* A replay of another computer's shot: that computer scores it. */
 		gNoKillScore = 1;
 		KillObject(victim);
 		gNoKillScore = 0;
 		return;
 	}
-	previous = BindNested(killer);
-	KillObject(victim);
-	RestoreBinding(previous);
+	KillObject(victim);	/* Network_CreditKill gives the shooter the points */
+}
+
+/* ---- Fair points ----
+   An object remembers the driver who last touched it. If it is destroyed
+   within kHitCreditFrames (rammed into the ditch, burnt out after a crash),
+   that driver gets its points; with no driver involved, nobody does. */
+#define kHitCreditFrames (6 * 60)
+
+void Network_MarkHit(tObject *object, const tObject *driver)
+{
+	int slot = GetSlotForPlayer(driver);
+	if (slot < 0 || !object || Network_IsDriverObject(object))
+		return;
+	object->lastHitSlot = (UInt8)(slot + 1);
+	object->lastHitFrame = (UInt32)gFrameCount;
+}
+
+void Network_CreditKill(tObject *victim, int score)
+{
+	int slot = victim->lastHitSlot - 1;
+	if (slot < 0 || slot >= kNetworkMaxPlayers || !sPlayers[slot].active ||
+		(UInt32)gFrameCount - victim->lastHitFrame > kHitCreditFrames)
+		return;
+	if (IsLocalSlot(slot)) {
+		int previous = BindNested(gPlayers[slot].obj);
+		gPlayers[slot].score += score;
+		KillScoreText(victim, score);	/* in that driver's view */
+		RestoreBinding(previous);
+	} else if (sIsHost && sLocalSlot >= 0) {
+		/* Destroyed in the host's world by a driver on another computer:
+		   tell that computer. */
+		tNetworkPlayer *state = &sPlayers[sLocalSlot];
+		state->awardSeq++;
+		state->awards[state->awardSeq % 8].seq = state->awardSeq;
+		state->awards[state->awardSeq % 8].target = (UInt8)slot;
+		state->awards[state->awardSeq % 8].amount = (UInt16)score;
+		state->awards[state->awardSeq % 8].x = victim->pos.x;
+		state->awards[state->awardSeq % 8].y = victim->pos.y;
+	}
+}
+
+/* Points the host's world gave to drivers on this computer. */
+static void ApplyAwards(int slot)
+{
+	const tNetworkPlayer *state = &sPlayers[slot];
+	if ((UInt8)(state->awardSeq - sSeenAwardSeq[slot]) > 8)
+		sSeenAwardSeq[slot] = (UInt8)(state->awardSeq - 8);
+	while (sSeenAwardSeq[slot] != state->awardSeq) {
+		int target;
+		sSeenAwardSeq[slot]++;
+		if (state->awards[sSeenAwardSeq[slot] % 8].seq != sSeenAwardSeq[slot])
+			continue;
+		target = state->awards[sSeenAwardSeq[slot] % 8].target;
+		if (IsLocalSlot(target) && gPlayers[target].obj) {
+			tObject spot;
+			int previous = BindNested(gPlayers[target].obj);
+			memset(&spot, 0, sizeof(spot));
+			spot.pos = P2D(state->awards[sSeenAwardSeq[slot] % 8].x,
+				state->awards[sSeenAwardSeq[slot] % 8].y);
+			gPlayers[target].score += state->awards[sSeenAwardSeq[slot] % 8].amount;
+			KillScoreText(&spot, state->awards[sSeenAwardSeq[slot] % 8].amount);
+			RestoreBinding(previous);
+		}
+	}
 }
 
 /* ---- Smooth remote motion ----
@@ -2651,6 +2721,8 @@ void Network_ProcessEvents(void)
 		}
 		if (sIsHost)
 			ApplyRemoteKills(slot);
+		else
+			ApplyAwards(slot);
 		/* Replay new shots; older ones than the history holds are lost. */
 		if ((UInt8)(player->shotSeq - sSeenShotSeq[slot]) > kShotHistory)
 			sSeenShotSeq[slot] = (UInt8)(player->shotSeq - kShotHistory);
@@ -3434,6 +3506,7 @@ void Network_Shutdown(void)
 	memset(sSeenSwarmSeq, 0, sizeof(sSeenSwarmSeq));
 	memset(sSeenJamSeq, 0, sizeof(sSeenJamSeq));
 	memset(sSeenKillSeq, 0, sizeof(sSeenKillSeq));
+	memset(sSeenAwardSeq, 0, sizeof(sSeenAwardSeq));
 	memset(sPlayerSampleCount, 0, sizeof(sPlayerSampleCount));
 	memset(sClockKnown, 0, sizeof(sClockKnown));
 	sLobbyPlayerLimit = kNetworkMaxPlayers;

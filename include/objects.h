@@ -130,6 +130,8 @@ typedef struct{
 	UInt8 netLocal;			/* never sent: effects, the drivers' own weapons */
 	UInt8 replica;			/* client: a copy of a host object */
 	UInt8 netSent;			/* host: already sent to the clients */
+	UInt8 lastHitSlot;		/* multiplayer: driver slot + 1 who last hit it, 0 = none */
+	UInt32 lastHitFrame;
 	UInt32 netSeenMS;		/* replica: arrival of its last state */
 	tNetSample netSamples[kNetSamples];	/* replica: recent states from the host */
 	UInt8 netSampleHead,netSampleCount;
@@ -176,6 +178,7 @@ int DamageLookFrame(tObject *theObj,int frame,int damagePos,float amount);
 void NitroFlame(tObject *car);
 void BonusObject(tObject *theObj);
 tObject *FindObjectByNetId(UInt16 netId);
+void KillScoreText(tObject *theObj,int score);
 void GetVisObjs(void);
 void FlushDeferredFrees(void);
 tObject *NewObject(tObject *,SInt16);

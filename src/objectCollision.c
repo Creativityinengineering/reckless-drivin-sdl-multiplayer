@@ -703,7 +703,10 @@ void HandleCollision(tObject *posObj)
 			float sqdist=xdist*xdist+ydist*ydist;
 			if(sqdist<kMaxCollDist*kMaxCollDist)
 				if(TestCollision(posObj,theObj,sqdist))
-				{						
+				{
+					/* Who touched whom, for fair points in multiplayer. */
+					Network_MarkHit(theObj,posObj);
+					Network_MarkHit(posObj,theObj);						
 					if((*theObj->type).flags&kObjectBounce)
 					{
 						if((*posObj->type).flags2&kObjectMissile){

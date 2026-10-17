@@ -117,6 +117,8 @@ int Network_RainHits(const tObject *object);
 int Network_IsZombieTarget(const tObject *driver);
 tObject *Network_ClearRoadDriver(const tObject *car);
 int Network_WarActive(void);
+void Network_MarkHit(tObject *object, const tObject *driver);
+void Network_CreditKill(tObject *victim, int score);
 
 /* Crate settings of the multiplayer menu (K): which pickups exist and how
    many packages lie on the road, in every multiplayer mode. Bits follow the

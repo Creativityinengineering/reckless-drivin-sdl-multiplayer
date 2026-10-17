@@ -404,6 +404,22 @@ int CalcBackCollision(t2DPoint pos)
 /* Set while a remote driver's replayed weapon destroys something here. */
 int gNoKillScore;
 
+/* The points of a destroyed object, popping up where it was. */
+void KillScoreText(tObject *theObj,int score)
+{
+	tTextEffect fx;
+	Str31 str;
+	char tmp[16];
+	int len=sprintf(tmp,"%d",score);
+	str[0]=len;
+	memcpy(str+1,tmp,len);
+	fx.x=theObj->pos.x;
+	fx.y=theObj->pos.y;
+	fx.effectFlags=kEffectExplode+kEffectTiny+kEffectAbsPos;
+	MakeFXStringFromNumStr(str,fx.text);
+	NewTextEffect(&fx);
+}
+
 void KillObject(tObject *theObj)
 {
 	tObjectTypePtr objType=theObj->type;
@@ -458,20 +474,14 @@ void KillObject(tObject *theObj)
 	}
 	else if((*objType).score&&!gNoKillScore)
 	{
-		tTextEffect fx;
-		Str31 str;
-		gCurPlayer->score+=(*objType).score;
+		/* Multiplayer: the points go to the driver who hit it, or nobody. */
+		if(Network_IsActive())
+			Network_CreditKill(theObj,(*objType).score);
+		else
 		{
-			char tmp[16];
-			int len = sprintf(tmp, "%d", (*objType).score);
-			str[0] = len;
-			memcpy(str+1, tmp, len);
+			gCurPlayer->score+=(*objType).score;
+			KillScoreText(theObj,(*objType).score);
 		}
-		fx.x=theObj->pos.x;
-		fx.y=theObj->pos.y;
-		fx.effectFlags=kEffectExplode+kEffectTiny+kEffectAbsPos;
-		MakeFXStringFromNumStr(str,fx.text);
-		NewTextEffect(&fx);
 	}
 	SpriteUnused(theObj->frame);
 	if((*objType).flags&kObjectDefaultDeath)
