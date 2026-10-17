@@ -105,6 +105,7 @@ int Network_AdvanceRaceClock(void);
 int Network_IsPackageMode(void);
 /* Multiplayer game modes, chosen with M in the multiplayer menu. */
 enum { kGameModeCoop, kGameModeDuel, kGameModePackages, kGameModePolice, kGameModeZombie,
+	kGameModeWildlife,
 	kGameModeCount };
 int Network_GetGameMode(void);
 void Network_SetSoloModes(int enabled);

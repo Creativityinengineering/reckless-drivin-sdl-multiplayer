@@ -100,7 +100,7 @@ player stays as it was; the original traffic and add-ons are one setting away
   computer sees the same cars, dents, skid marks, explosions and packages
 - **Common start:** cars wait until every computer has loaded the level, then
   3, 2, 1, GO; the host runs the race clock for everyone
-- **Five game modes** and **21 kinds of crates**, each with an adjustable
+- **Six game modes** and **21 kinds of crates**, each with an adjustable
   frequency, plus **11 crate themes**
 - **Extended traffic:** overtaking, jams, panic and road rage after crashes,
   police that hunt whoever rams them
@@ -137,6 +137,7 @@ without the `AIAssets/` folder simply show the original graphics.
 | **Packages** | Packages all over the road; a cop swarm hunts the driver who found it, with at least 20 cops |
 | **Police** | Two more cops every 2.5 seconds, and they ram |
 | **Zombie** | Every ordinary car near a driver turns and hunts him |
+| **Wildlife** | Animals cross the road everywhere, and new ones keep coming out ahead of every driver |
 
 ### Crates
 
@@ -417,7 +418,7 @@ who are out watch the leader from their own view. Drivers far behind the leader
 often get extra missiles and mines from add-on pickups, and the police prefer
 to chase the leader.
 
-Press **M** in the multiplayer menu to cycle through five modes (on a LAN, the
+Press **M** in the multiplayer menu to cycle through six modes (on a LAN, the
 host's mode applies; packages and police also work with one local player):
 
 - **Co-op:** hits cost a life but score nothing. A driver who has finished
@@ -436,6 +437,9 @@ host's mode applies; packages and police also work with one local player):
   driver, until about ten are around them.
 - **Zombie:** like co-op, but every ordinary car that comes within about
   1000 pixels of a driver turns and hunts him down. There is extra traffic.
+- **Wildlife:** like co-op, but animals cross the road everywhere: about
+  every 220 pixels at the start, and more keep coming out ahead of each
+  driver (up to about fourteen around him). Not on water levels.
 
 Press **K** in the multiplayer menu to choose the crates:
 

@@ -1678,6 +1678,26 @@ static void UpdateWar(void)
 	}
 }
 
+/* Wildlife mode: new animals keep coming out ahead of every driver. */
+#define kWildlifeInterval 45	/* frames */
+#define kWildlifeMaxNear 14
+
+static void UpdateWildlife(void)
+{
+	int slot;
+	if (Network_GetGameMode() != kGameModeWildlife || Network_IsClient() ||
+		Network_RaceHeld() || gFrameCount % kWildlifeInterval || !gFirstObj)
+		return;
+	for (slot = 0; slot < kNetworkMaxPlayers; ++slot) {
+		tObject *driver = Network_IsActive() ? (IsRacing(slot) ? gPlayers[slot].obj : NULL) :
+			(slot == 0 ? gPlayerObj : NULL);
+		if (!driver || Extended_CountAnimalsNear(driver) >= kWildlifeMaxNear)
+			continue;
+		Extended_SpawnAnimal(driver->pos.y + 500 + RanFl(0, 450));
+		Extended_SpawnAnimal(driver->pos.y + 500 + RanFl(0, 450));
+	}
+}
+
 static void UpdateZombies(void)
 {
 	tObject *object;
@@ -1727,6 +1747,7 @@ void Network_UpdatePoliceMode(void)
 	int slot;
 	static UInt8 rainSeen[kNetworkMaxPlayers];
 	UpdateZombies();
+	UpdateWildlife();
 	UpdateWar();
 	/* Jammers stay off while a swarm hunts (also against Lock add-ons). */
 	for (slot = 0; slot < kNetworkMaxPlayers; ++slot)

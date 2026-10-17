@@ -129,6 +129,49 @@ static void AddPackages(float gap)
 	}
 }
 
+/* Wildlife mode: animals that cross the road (the game's road-kill types),
+   placed at the road side facing the road; they walk across and back. */
+static const SInt16 kAnimalTypes[]={163,185};
+
+void Extended_SpawnAnimal(float y)
+{
+	tRoad road;
+	tObject *animal;
+	int index=(int)(y/2),left=RanProb(0.5);
+	if(index<1||index>=(int)*gRoadLenght-1||(*gRoadInfo).water)
+		return;
+	road=gRoadData+index;
+	animal=NewObject(gFirstObj,kAnimalTypes[RanInt(0,2)]);
+	if(!animal)
+		return;
+	animal->pos=P2D(left?(*road)[0]-RanFl(20,90):(*road)[3]+RanFl(20,90),y);
+	animal->dir=left?PI/2:3*PI/2;	/* facing the road */
+	animal->control=kObjectCrossRoad;
+}
+
+int Extended_CountAnimalsNear(const tObject *target)
+{
+	tObject *theObj=(tObject*)gFirstObj->next;
+	int count=0;
+	while(theObj!=gFirstObj)
+	{
+		if(theObj->control==kObjectCrossRoad&&fabs(theObj->pos.y-target->pos.y)<1200)
+			count++;
+		theObj=(tObject*)theObj->next;
+	}
+	return count;
+}
+
+/* At the start of a level: an animal about every 220 pixels of road. */
+void Extended_AddWildlife(void)
+{
+	float y;
+	if((*gRoadInfo).water)
+		return;
+	for(y=700;y<gLevelData->levelEnd-200;y+=220+RanFl(-60,60))
+		Extended_SpawnAnimal(y);
+}
+
 /* Crate settings: fewer (half of the level's add-on packages), the level's
    own, more (one every 640 pixels) or many (every 320 pixels). */
 void Extended_AdjustPackages(int amount)

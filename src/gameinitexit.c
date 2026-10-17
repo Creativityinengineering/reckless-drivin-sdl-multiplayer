@@ -248,6 +248,8 @@ int LoadLevel()
 	if(Prefs_IsExtendedMode()||Network_GetGameMode()==kGameModeZombie)
 		Extended_AddTraffic();
 	Extended_AdjustPackages(Network_GetPackageAmount());
+	if(Network_GetGameMode()==kGameModeWildlife)
+		Extended_AddWildlife();
 
 	for(i=0;i<kMaxPlayers;i++)
 		Player_ResetForLevel(&gPlayers[i]);

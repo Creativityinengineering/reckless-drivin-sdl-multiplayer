@@ -359,20 +359,21 @@ static void DrawMenuLicensePlate(int imageIndex, int hover, int pressed)
    A big mode selector on top, the three ways to play, and buttons for the
    crate settings and the controls. Keys: M mode, K crates, P controls. */
 static const char *const kModeNames[kGameModeCount] = {
-	"CO-OP", "DUEL", "PACKAGES", "POLICE", "ZOMBIE"
+	"CO-OP", "DUEL", "PACKAGES", "POLICE", "ZOMBIE", "WILDLIFE"
 };
 static const char *const kModeInfos[kGameModeCount] = {
 	"NO POINTS FOR HITS - SHARE YOUR LIVES",
 	"WEAPONS HIT RIVALS - 1000 PER TAKEDOWN",
 	"PACKAGES ALL OVER - SWARMS HUNT THE FINDER",
 	"COPS KEEP COMING - AND THEY RAM",
-	"EVERY CAR ON THE ROAD HUNTS YOU"
+	"EVERY CAR ON THE ROAD HUNTS YOU",
+	"ANIMALS CROSSING THE ROAD EVERYWHERE"
 };
 static const UInt16 kModeColors[kGameModeCount] = {
-	COL_GREEN, COL_RED, COL_YELLOW, COL_CYAN, COL_WHITE
+	COL_GREEN, COL_RED, COL_YELLOW, COL_CYAN, COL_WHITE, 0x7E00
 };
 static const UInt16 kModeShades[kGameModeCount] = {
-	0x0100, 0x2400, 0x2520, 0x00E9, 0x18C6
+	0x0100, 0x2400, 0x2520, 0x00E9, 0x18C6, 0x28A0
 };
 #define kModePanelY 92
 #define kModePanelH 58
