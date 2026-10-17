@@ -575,6 +575,7 @@ static int sMouseClickY  = 0;
  * get hold-to-scroll behavior. */
 static Uint8 sKeyPressed[SDL_NUM_SCANCODES];
 static Uint8 sKeyTyped[SDL_NUM_SCANCODES];
+static char sTypedText[64];	/* text typed since the last Platform_TakeTypedText */
 
 /* Optional gamepad. */
 static SDL_GameController *sGameController = NULL;
@@ -743,6 +744,16 @@ void Platform_PollEvents(void)
             }
             break;
 
+        case SDL_TEXTINPUT: {
+            size_t length = strlen(sTypedText);
+            const char *c;
+            for (c = ev.text.text; *c && length + 1 < sizeof(sTypedText); ++c)
+                if ((unsigned char)*c >= 32 && (unsigned char)*c <= 126)
+                    sTypedText[length++] = *c;
+            sTypedText[length] = '\0';
+            break;
+        }
+
         case SDL_MOUSEBUTTONDOWN:
             if (ev.button.button == SDL_BUTTON_LEFT) {
                 int lx, ly;
@@ -770,6 +781,31 @@ int Platform_IsKeyDown(int scancode)
     if (scancode >= 0 && scancode < SDL_NUM_SCANCODES)
         return state[scancode] ? 1 : 0;
     return 0;
+}
+
+void Platform_StartTextEntry(void)
+{
+    sTypedText[0] = '\0';
+    SDL_StartTextInput();
+}
+
+void Platform_StopTextEntry(void)
+{
+    SDL_StopTextInput();
+    sTypedText[0] = '\0';
+}
+
+int Platform_TakeTypedText(char *text, int capacity)
+{
+    int length = (int)strlen(sTypedText);
+    if (capacity <= 0)
+        return 0;
+    if (length >= capacity)
+        length = capacity - 1;
+    memcpy(text, sTypedText, (size_t)length);
+    text[length] = '\0';
+    sTypedText[0] = '\0';
+    return length;
 }
 
 int Platform_WasKeyPressed(int scancode)

@@ -943,6 +943,30 @@ static void DrawShieldRings(float xDrawStart,float yDrawStart,float zoom)
 	}
 }
 
+/* Multiplayer: the other drivers' names over their cars. */
+static void DrawNameTags(float xDrawStart,float yDrawStart,float zoom)
+{
+	tPixel *fb=(tPixel*)gBaseAddr;
+	int stride=gRowBytes/4,slot,scale=Platform_GetRenderScale();
+	if(!Network_IsActive()||Network_GetPlayerCount()<2)
+		return;
+	for(slot=0;slot<kNetworkMaxPlayers;slot++)
+	{
+		tObject *car=gPlayers[slot].obj;
+		const char *name=Network_GetSlotName(slot);
+		int x,y,width;
+		if(!car||car==gPlayerObj||!name||!Network_IsSlotActive(slot))
+			continue;
+		x=(int)((car->pos.x-xDrawStart)/zoom/scale);
+		y=(int)((yDrawStart-car->pos.y)/zoom/scale-(*car->type).length*kScale*0.6f/zoom/scale)-12;
+		width=TR_StringWidth(name,1);
+		if(x<-width||x>SCREEN_WIDTH+width||y<-10||y>SCREEN_HEIGHT)
+			continue;
+		TR_FillRect(fb,stride,x-width/2-2,y-2,width+4,12,COL_BLACK);
+		TR_DrawStringCentered(fb,stride,x,y,name,COL_WHITE,1);
+	}
+}
+
 /* Rain crate: streaks over the view of a driver someone else rains on. */
 static void DrawRain(void)
 {
@@ -991,6 +1015,7 @@ void RenderFrame()
 	DrawParticleFXZoomed(xDrawStart,yDrawStart,zoom,0);
 	DrawSpritesZoomed(xDrawStart,yDrawStart,zoom);
 	DrawShieldRings(xDrawStart,yDrawStart,zoom);
+	DrawNameTags(xDrawStart,yDrawStart,zoom);
 	DrawParticleFXZoomed(xDrawStart,yDrawStart,zoom,1);
 	DrawRain();
 	DrawTextFXZoomed(xDrawStart,yDrawStart,zoom);

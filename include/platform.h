@@ -53,6 +53,10 @@ int Platform_IsKeyDown(int scancode);
  * transition cannot re-trigger until released and pressed again.
  * WasKeyTyped: press or OS auto-repeat; for hold-to-scroll navigation. */
 int Platform_WasKeyPressed(int scancode);
+/* Typed text (printable ASCII) while text entry is on, consumed on read. */
+void Platform_StartTextEntry(void);
+void Platform_StopTextEntry(void);
+int Platform_TakeTypedText(char *text, int capacity);
 int Platform_WasKeyTyped(int scancode);
 int Platform_GetElement(int element);
 int Platform_GetEvent(int *element, int *data);

@@ -538,8 +538,9 @@ void GameFrame()
 		tObject *viewDrivers[kNetworkMaxPlayers];
 		int viewCount = 0, view;
 		if (Network_IsActive() && !Network_IsLocalMultiplayer() &&
-			Prefs_IsLanOwnScreen()) {
-			/* LAN, own screen: only this computer's driver, full size. */
+			(Prefs_IsLanOwnScreen() || Network_GetPlayerCount() > 4)) {
+			/* LAN, own screen: only this computer's driver, full size.
+			   Split screen has room for four views at most. */
 			viewDrivers[0] = Network_GetLocalDriverObject(0);
 			viewCount = viewDrivers[0] ? 1 : 0;
 		} else if (Network_IsActive()) {

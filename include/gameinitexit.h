@@ -4,6 +4,7 @@
 extern int gLevelID;
 extern int gGameOn;
 extern int gPlayerCarID;
+extern int gStartLevel;
 
 void DisposeLevel();
 void StartGame(int);

@@ -3,7 +3,7 @@
 
 #include "objects.h"
 
-#define kMaxPlayers 4
+#define kMaxPlayers 10
 #define kShotHistory 4
 
 /* A missile or mine fired by a driver, replayed on the other computers. */

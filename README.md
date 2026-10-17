@@ -8,7 +8,7 @@
 [![Linux](https://img.shields.io/github/actions/workflow/status/DarrCoh/reckless-drivin-sdl/build.yml?label=Linux&logo=linux)](https://github.com/DarrCoh/reckless-drivin-sdl/actions/workflows/build.yml)
 [![Windows](https://img.shields.io/github/actions/workflow/status/DarrCoh/reckless-drivin-sdl/build.yml?label=Windows&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2ZmZiI+PHBhdGggZD0iTTAgMy40NDlMOS43NSAyLjF2OS40NTFIMG0xMC45NDktOS42MDJMMjQgMHYxMS40SDEwLjk0OU0wIDEyLjZoOS43NXY5LjQ1MUwwIDIwLjY5OU0xMC45NDkgMTIuNkgyNFYyNGwtMTIuOS0xLjgwMSIvPjwvc3ZnPg==)](https://github.com/DarrCoh/reckless-drivin-sdl/actions/workflows/build.yml)
 
-### A native SDL2 port of the classic Mac OS racing game, for up to four drivers
+### A native SDL2 port of the classic Mac OS racing game, for up to ten drivers
 
 *Originally by [Jonas Echterhoff](https://github.com/jechter/RecklessDrivin) (2000), brought back to life on modern hardware*
 
@@ -16,9 +16,7 @@
 
 ---
 
-<!-- Replace these with actual screenshots once captured -->
-<!-- ![Main Menu](screenshots/menu.png) -->
-<!-- ![Gameplay](screenshots/gameplay.png) -->
+<img src="screenshots/start-screen.jpg" width="720" alt="Reckless Drivin' start screen with the license-plate menu">
 
 *640x480 software-rendered, pixel-perfect; just like it was in 2000*
 
@@ -71,7 +69,7 @@ None of this would exist without the people who brought the game back. Thank you
 - **Menu polish:** hover highlights and press states on all buttons, click sound feedback
 - **Remappable controls:** rebind all 8 game keys from the Preferences menu
 - **Gamepad support:** SDL2 GameController API with analog stick + triggers
-- **Multiplayer:** up to four drivers over a local network or on one computer, with split-screen views
+- **Multiplayer:** up to four drivers on one computer (split screen) or up to ten over a local network
 - **Per-player controls:** configure Solo and all four local/network driver key profiles from Preferences or by pressing P in the multiplayer menu
 - **Resizable window:** maintains 4:3 aspect ratio with letterboxing
 - **Optional 2x upscaling:** smooth 1280x960 display output, selectable in Preferences
@@ -86,15 +84,20 @@ None of this would exist without the people who brought the game back. Thank you
 ## Multiplayer Edition
 
 *Added by Cengineering.* This fork turns the port into a party game: up to four drivers race each
-other on one computer (split screen) or across a local network, with game
+other on one computer (split screen), up to ten across a local network, with game
 modes, new crates and wilder traffic on top of the original game. Single
 player stays as it was; the original traffic and add-ons are one setting away
 (**Game Mode: ORIGINAL** in Preferences).
 
 ### What's new
 
-- **Local and LAN multiplayer** for up to four drivers, split screen or own
-  screen, each with their own car, controls, lives, score and finish result
+- **Local and LAN multiplayer:** up to four drivers in split screen on one
+  computer, up to ten on a LAN (own screen each from five drivers on), each
+  with their own car, controls, lives, score and finish result
+- **Driver names:** type your name in the LAN lobby (**N**); the others see it
+  in their lobby and over your car during the race
+- **Start level:** choose the level a multiplayer game starts in (**LEVEL**
+  button or **+/-** in the multiplayer menu); on a LAN the host's choice counts
 - **Own sound for every driver:** in split screen each driver has their own
   engine and skid sounds, coming from their side of the screen, and sounds in
   the world are heard from the closest driver; on a LAN every computer plays
@@ -129,7 +132,8 @@ without the `AIAssets/` folder simply show the original graphics.
    arrows, set the crates with **K**, then **HOST LAN GAME**.
 3. On the others choose **MULTIPLAYER** and **JOIN LAN GAME**; the host
    appears in the list.
-4. Everyone picks a car in the lobby (and **V** for split or own screen).
+4. Everyone picks a car in the lobby, types a name with **N** (and **V** for
+   split or own screen).
 5. The host starts; the race begins on all computers with a countdown.
 
 ### Game modes
@@ -369,7 +373,7 @@ Press **`2`** on the main menu as a shortcut to start local multiplayer directly
 ### LAN Multiplayer
 
 Click the **MULTIPLAYER** license-plate button and choose **HOST LAN GAME** on
-the host computer. Choose the target player count (2–4); the host lobby waits
+the host computer. Choose the target player count (2–10); the host lobby waits
 until that many players, including the host, have connected. The **START RACE**
 button becomes available when the target count is reached. On each other
 computer, choose **JOIN LAN GAME**: the game searches the network and lists
@@ -378,10 +382,13 @@ number). Press **M** there to type an IPv4 address instead; the host lobby
 shows its own address. After joining, a waiting screen shows whether the host
 answered and waits until the host starts the race. In both lobbies every
 driver picks a vehicle with LEFT/RIGHT (or by clicking the arrows) and sees
-the other drivers' choices; the race then starts on all computers at once.
+the other drivers' choices. Press **N** (or click the name line) to type your
+driver name; it shows in the other lobbies and over your car in the race. The
+race then starts on all computers at once, in the start level the host chose.
 Each player chooses their own view with **V** in the lobby (or **LAN View** in
 Preferences): **SPLIT SCREEN** shows every driver, **OWN SCREEN** only your
-own car, full size. A driver whose computer stalls briefly rejoins automatically, and a computer
+own car, full size. With more than four drivers every computer uses its own
+screen. A driver whose computer stalls briefly rejoins automatically, and a computer
 that joins again after leaving without notice (or after a restart) gets its
 old slot back. When a LAN game ends, every computer closes the session, so
 hosting and joining again start afresh. If the host never answers,
@@ -403,7 +410,7 @@ On each other computer, join using the host's IPv4 address:
 The host starts the race from the main menu; connected clients start with it.
 The default UDP port is **33777** (override with `--host PORT` or
 `--join IPv4 PORT`). Allow that port through the host's firewall. LAN races
-support up to four drivers total, including the host. Connected players need
+support up to ten drivers total, including the host. Connected players need
 to use the same game version.
 
 In multiplayer, each driver keeps a separate score, weapon inventory, and

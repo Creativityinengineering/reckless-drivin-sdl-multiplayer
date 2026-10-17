@@ -167,6 +167,20 @@ int Prefs_IsExtendedMode(void)
 
 /* gPrefs.unused[10] bit 0: LAN view, 0 = split screen with every driver,
    1 = own screen (only this computer's driver). */
+/* gPrefs.unused[10] bits 4-7: the level a multiplayer game starts in. */
+int Prefs_GetStartLevel(void)
+{
+    int level = gPrefs.unused[10] >> 4;
+    return level < 10 ? level : 0;
+}
+
+void Prefs_SetStartLevel(int level)
+{
+    if (level < 0 || level >= 10)
+        level = 0;
+    gPrefs.unused[10] = (UInt8)((gPrefs.unused[10] & 0x0F) | (level << 4));
+}
+
 int Prefs_IsLanOwnScreen(void)
 {
     return gPrefs.unused[10] & 1;

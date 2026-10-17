@@ -636,6 +636,9 @@ void GetLevelNumber()
 	}
 }
 
+/* Multiplayer menu: the level the next game starts in (reset after). */
+int gStartLevel;
+
 void StartGame(int lcheat)
 {
 	if (Network_IsClient() && !Network_GameHasStarted())
@@ -643,7 +646,11 @@ void StartGame(int lcheat)
 	DisposeInterface();
 	gCurPlayer=&gPlayers[0];
 	Player_ResetForCampaign(gCurPlayer);
-	gLevelID=0;
+	gLevelID=gStartLevel;
+	if (Network_IsClient()) {
+		int hostLevel = Network_TakeHostLevel();
+		gLevelID = hostLevel >= 0 ? hostLevel : 0;
+	}
 	gPlayerCarID=kNormalPlayerCarID;
 	if (Network_IsActive())
 		ChoosePlayerVehicles(Network_GetLocalDriverCount());

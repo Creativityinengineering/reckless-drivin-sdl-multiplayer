@@ -464,12 +464,13 @@ static void DrawGlyphLinesScaled(Ptr theCH,float x0,float y0,float scale,
 void DrawTextFXZoomed(float xDrawStart,float yDrawStart,float zoom)
 {
 	int i,line,ch;
-	int view=(int)(gCurPlayer-gPlayers);
+	int slot=(int)(gCurPlayer-gPlayers);
+	/* Split screen has at most kTextFXViews views; a LAN computer with
+	   more drivers only draws its own one. */
+	int view=slot>=0?slot%kTextFXViews:0;
 	/* Effect positions are in 640x480 screen units (world positions are
 	   already in render pixels); glyphs grow with the render scale. */
 	int renderScale=Platform_GetRenderScale();
-	if(view<0||view>=kTextFXViews)
-		view=0;
 	for(i=0;i<gFXCount;i++)
 	{
 		float dt=(gFrameCount-gTextFX[i].fxStartFrame)*kFrameDuration*(gTextFX[i].effectFlags&kEffectTiny?3:1);
@@ -479,7 +480,7 @@ void DrawTextFXZoomed(float xDrawStart,float yDrawStart,float zoom)
 		float scale=exploZoom*renderScale;
 		int sinLines=(gTextFX[i].effectFlags&kEffectSinLines)!=0;
 		float baseX,baseY;
-		if(gTextFX[i].owner>=0&&gTextFX[i].owner!=view)
+		if(gTextFX[i].owner>=0&&gTextFX[i].owner!=slot)
 			goto timeout;
 		if(gTextFX[i].effectFlags&kEffectAbsPos)
 		{

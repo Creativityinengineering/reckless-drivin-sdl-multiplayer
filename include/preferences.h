@@ -21,7 +21,7 @@ typedef struct{
 	UInt8  sound,engineSound,hqSound,skidSound;
 	UInt8  lineSkip,motionBlur,hiColor;
 	UInt8 hidElements[kNumElements];
-	UInt8  unused[11]; /* bytes 0-1: window width (LE), 2-3: window height (LE), 4: fullscreen, 8: multiplayer game mode (co-op, duel, packages, police), 9: original game mode, 10: bit 0 LAN own screen */
+	UInt8  unused[11]; /* bytes 0-1: window width (LE), 2-3: window height (LE), 4: fullscreen, 8: multiplayer game mode (co-op, duel, packages, police), 9: original game mode, 10: bit 0 LAN own screen, bits 4-7 multiplayer start level */
 	tScoreRecord	high[kNumHighScoreEntrys];
 	float lapRecords[10];
 	Str255 name,code;
@@ -37,6 +37,8 @@ void Preferences();
 void LoadPrefs();
 void WritePrefs(int reset);
 int Prefs_IsExtendedMode(void);
+int Prefs_GetStartLevel(void);
+void Prefs_SetStartLevel(int level);
 int Prefs_IsLanOwnScreen(void);
 void Prefs_ToggleLanScreen(void);
 

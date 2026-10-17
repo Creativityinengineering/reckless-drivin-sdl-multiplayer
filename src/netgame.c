@@ -47,7 +47,7 @@ typedef socklen_t NetworkSockLen;
 #endif
 
 #define kNetworkMagic 0x52444d50u
-#define kNetworkVersion 17
+#define kNetworkVersion 18
 #define kNetworkIntervalMS 50
 #define kNetworkTimeoutMS 10000
 
@@ -543,6 +543,19 @@ static void CopyLocalName(char name[16], int slot)
 	memcpy(name, gPrefs.playerNames[index] + 1, (size_t)nameLength);
 }
 
+/* The lobby name field: the LAN driver name (first player name), sent to
+   the others with the next hello or state. */
+void Network_SetLocalName(const char *name)
+{
+	size_t length = strlen(name);
+	if (length > 15)
+		length = 15;
+	gPrefs.playerNames[0][0] = (UInt8)length;
+	memcpy(gPrefs.playerNames[0] + 1, name, length);
+	if (!sLocalTwoPlayer && sLocalSlot >= 0 && sLocalSlot < kNetworkMaxPlayers)
+		CopyLocalName(sPlayers[sLocalSlot].name, sLocalSlot);
+}
+
 static void ReadLocalPlayer(void)
 {
 	tObject *player = gPlayerObj;
@@ -927,9 +940,9 @@ void Network_EnableLocalPlayers(int count)
 		fprintf(stderr, "[network] Local multiplayer cannot be combined with a LAN game\n");
 		return;
 	}
-	if (count < 2 || count > kNetworkMaxPlayers) {
+	if (count < 2 || count > kLocalPlayerCount) {
 		fprintf(stderr, "[network] Local player count must be between 2 and %d\n",
-			kNetworkMaxPlayers);
+			kLocalPlayerCount);
 		return;
 	}
 	sLocalTwoPlayer = 1;
@@ -942,6 +955,7 @@ void Network_EnableLocalPlayers(int count)
 
 void Network_EndLocalGame(void)
 {
+	int slot;
 	Network_UnbindDriver();
 	sSoloModes = 0;
 	if (!sLocalTwoPlayer)
@@ -949,9 +963,8 @@ void Network_EndLocalGame(void)
 	sLocalTwoPlayer = 0;
 	sLocalPlayerCount = 2;
 	sLobbyPlayerLimit = kNetworkMaxPlayers;
-	sPlayers[1].active = 0;
-	sPlayers[2].active = 0;
-	sPlayers[3].active = 0;
+	for (slot = 1; slot < kNetworkMaxPlayers; ++slot)
+		sPlayers[slot].active = 0;
 	sLocalPlayer2 = NULL;
 	Platform_BeginMultiView(1);
 }
@@ -2815,6 +2828,7 @@ int Network_GetLocalInput(const tObject *object, tInputData *input)
 
 /* ---- Placing drivers apart ---- */
 #define kDriverGap 80.0f	/* cars are about 40 px long */
+#define kGridRowGap 64.0f	/* five rows of two for ten drivers */
 
 /* The carriageway around x at height y: start positions stay on it. */
 static void GetCarriageway(float x, float y, float *left, float *right)
@@ -2853,7 +2867,7 @@ static void SetDriverTarget(tObject *driver)
    its own place, so computers that place only their own car agree. */
 static void PlaceOnGrid(tObject *driver, int slot)
 {
-	float left, right, x = gLevelData->xStartPos, y = 500 - (slot / 2) * kDriverGap;
+	float left, right, x = gLevelData->xStartPos, y = 500 - (slot / 2) * kGridRowGap;
 	GetCarriageway(x, y, &left, &right);
 	x += slot & 1 ? 32 : -32;
 	if (x < left) x = left;
@@ -3212,6 +3226,17 @@ static void ProcessClientPacket(const tNetworkPacket *packet, const struct socka
 		sStartPending = 1;
 }
 
+/* A client joining a running campaign starts in the host's level (and
+   does not load it a second time). */
+int Network_TakeHostLevel(void)
+{
+	int level = sPendingLevel;
+	if (!Network_IsClient() || level < 0 || level >= 10)
+		return -1;
+	sPendingLevel = -1;
+	return level;
+}
+
 void Network_Poll(void)
 {
 	union {
@@ -3275,8 +3300,10 @@ void Network_Poll(void)
 	}
 	if (sIsHost) {
 		int slot;
+		/* Packets received above stamp lastSeen later than now. */
+		now = NetworkTimeMS();
 		for (slot = 1; slot < kNetworkMaxPlayers; ++slot) {
-			if (sPeers[slot].used && now - sPeers[slot].lastSeen > kNetworkTimeoutMS) {
+			if (sPeers[slot].used && now > sPeers[slot].lastSeen + kNetworkTimeoutMS) {
 				sPeers[slot].used = 0;
 				memset(&sPlayers[slot], 0, sizeof(sPlayers[slot]));
 				fprintf(stderr, "[network] Player in slot %d timed out\n", slot + 1);

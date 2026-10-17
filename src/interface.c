@@ -381,6 +381,10 @@ static const UInt16 kModeShades[kGameModeCount] = {
 #define kMenuRowStep 44
 #define kMenuButtonY 300
 #define kMenuButtonH 50
+#define kMenuButtonW 132
+#define kCratesButtonX 116
+#define kLevelButtonX 254
+#define kControlsButtonX 392
 
 static int CurrentMultiplayerMode(void)
 {
@@ -461,7 +465,7 @@ static void DrawMultiplayerOverlay(const char *title, const char *subtitle,
 		}
 	}
 
-	/* crate settings and controls */
+	/* crate settings, start level and controls */
 	{
 		int themes = Network_GetLocalThemeMode(), kind, enabled = 0;
 		for (kind = 0; kind < kCrateKindCount; ++kind)
@@ -469,19 +473,22 @@ static void DrawMultiplayerOverlay(const char *title, const char *subtitle,
 		if (themes == kThemeRandom)
 			snprintf(info1, sizeof(info1), "RANDOM THEMES");
 		else if (themes >= kThemeFixed)
-			snprintf(info1, sizeof(info1), "THEME %s", kCrateThemes[themes - kThemeFixed].name);
+			snprintf(info1, sizeof(info1), "%s", kCrateThemes[themes - kThemeFixed].name);
 		else
-			snprintf(info1, sizeof(info1), "%d OF %d CRATES ON", enabled, kCrateKindCount);
+			snprintf(info1, sizeof(info1), "%d/%d CRATES ON", enabled, kCrateKindCount);
 		snprintf(info2, sizeof(info2), "PACKAGES %s", kAmounts[Network_GetLocalPackageAmount()]);
-		DrawMenuButton(fb, stride, 116, kMenuButtonY, 200, kMenuButtonH,
+		DrawMenuButton(fb, stride, kCratesButtonX, kMenuButtonY, kMenuButtonW, kMenuButtonH,
 			COL_YELLOW, 0x2520, "CRATES", info1, info2, COL_YELLOW);
 	}
-	snprintf(info1, sizeof(info1), "PLAYER 1 GAS: %s", gasKey && gasKey[0] ? gasKey : "UNBOUND");
-	DrawMenuButton(fb, stride, 324, kMenuButtonY, 200, kMenuButtonH,
-		COL_CYAN, 0x00E9, "CONTROLS", info1, "KEYS FOR ALL PLAYERS", COL_CYAN);
+	snprintf(info1, sizeof(info1), "START IN %d", Prefs_GetStartLevel() + 1);
+	DrawMenuButton(fb, stride, kLevelButtonX, kMenuButtonY, kMenuButtonW, kMenuButtonH,
+		0x7C1F, 0x300C, "LEVEL", info1, "<  CLICK  >", 0x7C1F);
+	snprintf(info1, sizeof(info1), "P1 GAS: %.8s", gasKey && gasKey[0] ? gasKey : "UNBOUND");
+	DrawMenuButton(fb, stride, kControlsButtonX, kMenuButtonY, kMenuButtonW, kMenuButtonH,
+		COL_CYAN, 0x00E9, "KEYS", info1, "ALL PLAYERS", COL_CYAN);
 
 	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 364,
-		"M MODE  |  K CRATES  |  P CONTROLS  |  ENTER START", 0x4210, 1);
+		"M MODE  K CRATES  +/- LEVEL  P KEYS  ENTER START", 0x4210, 1);
 	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 384,
 		"ESC  BACK", 0x4210, 1);
 	Platform_Blit2Screen();
@@ -687,6 +694,12 @@ static void ToggleMultiplayerMode(int step)
 	WritePrefs(0);
 }
 
+static void StepStartLevel(int step)
+{
+	Prefs_SetStartLevel((Prefs_GetStartLevel() + 10 + step) % 10);
+	WritePrefs(0);
+}
+
 static int ChooseMultiplayerMode(void)
 {
 	int selected = 0;
@@ -707,6 +720,20 @@ static int ChooseMultiplayerMode(void)
 		}
 		if (Platform_WasKeyPressed(SDL_SCANCODE_M)) {
 			ToggleMultiplayerMode(1);
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+			continue;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_EQUALS) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_PLUS) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_RIGHTBRACKET)) {
+			StepStartLevel(1);
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+			continue;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_MINUS) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_MINUS) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_SLASH)) {
+			StepStartLevel(-1);
 			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
 			continue;
 		}
@@ -757,9 +784,11 @@ static int ChooseMultiplayerMode(void)
 				continue;
 			}
 			if (y >= kMenuButtonY && y < kMenuButtonY + kMenuButtonH) {
-				if (x >= 116 && x < 316)
+				if (x >= kCratesButtonX && x < kCratesButtonX + kMenuButtonW)
 					ChooseCrates();
-				else if (x >= 324 && x < 524)
+				else if (x >= kLevelButtonX && x < kLevelButtonX + kMenuButtonW)
+					StepStartLevel(x < kLevelButtonX + kMenuButtonW / 2 ? -1 : 1);
+				else if (x >= kControlsButtonX && x < kControlsButtonX + kMenuButtonW)
 					ConfigureInput();
 				DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
 				continue;
@@ -788,9 +817,24 @@ static int ChooseMultiplayerMode(void)
 	}
 }
 
-static void DrawPlayerCountPicker(int selected, const char *title)
+/* LAN player count: 2 to kNetworkMaxPlayers drivers, one per computer. */
+#define kCountButtonW 40
+#define kCountButtonGap 4
+#define kCountButtonY 196
+#define kCountButtonH 56
+
+static int CountButtonX(int count, int minimum)
 {
-	int rowBytes, stride, player;
+	int buttons = kNetworkMaxPlayers - minimum + 1;
+	int width = buttons * (kCountButtonW + kCountButtonGap) - kCountButtonGap;
+	return SCREEN_WIDTH / 2 - width / 2 +
+		(count - minimum) * (kCountButtonW + kCountButtonGap);
+}
+
+static void DrawPlayerCountPicker(int selected, int minimum, const char *title)
+{
+	int rowBytes, stride, count;
+	char label[32];
 	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
 	if (!fb)
 		return;
@@ -802,24 +846,25 @@ static void DrawPlayerCountPicker(int selected, const char *title)
 		title, COL_YELLOW, 2);
 	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 158,
 		"CHOOSE NUMBER OF PLAYERS", COL_WHITE, 1);
-	for (player = 1; player <= kLocalPlayerCount; ++player) {
-		int x = 148 + (player - 1) * 86;
-		UInt16 color = player == selected ? 0x7FE0 : COL_DKGRAY;
-		TR_FillRect(fb, stride, x, 194, 72, 72, color);
-		TR_FillRect(fb, stride, x + 2, 196, 68, 68,
-			player == selected ? COL_BAR_FG : COL_DKGRAY);
-		TR_DrawStringCentered(fb, stride, x + 36, 211,
-			player == selected ? "PLAYER" : "", COL_WHITE, 1);
-		{
-			char number[2] = {(char)('0' + player), '\0'};
-			TR_DrawStringCentered(fb, stride, x + 36, 229,
-				number, player == selected ? COL_BLACK : COL_WHITE, 2);
-		}
+	for (count = minimum; count <= kNetworkMaxPlayers; ++count) {
+		int x = CountButtonX(count, minimum);
+		char number[3];
+		snprintf(number, sizeof(number), "%d", count);
+		TR_FillRect(fb, stride, x, kCountButtonY, kCountButtonW, kCountButtonH,
+			count == selected ? 0x7FE0 : COL_DKGRAY);
+		TR_FillRect(fb, stride, x + 2, kCountButtonY + 2, kCountButtonW - 4,
+			kCountButtonH - 4, count == selected ? COL_BAR_FG : COL_DKGRAY);
+		TR_DrawStringCentered(fb, stride, x + kCountButtonW / 2,
+			kCountButtonY + kCountButtonH / 2 - 8, number,
+			count == selected ? COL_BLACK : COL_WHITE, 2);
 	}
+	snprintf(label, sizeof(label), "%d PLAYERS  -  ONE PER COMPUTER", selected);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 264,
+		label, COL_GRAY, 1);
 	TR_FillRect(fb, stride, 216, 286, 208, 38, COL_BAR_FG);
 	TR_FillRect(fb, stride, 218, 288, 204, 34, 0x7FE0);
 	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 299,
-		"START LOCAL GAME", COL_BLACK, 1);
+		"HOST LAN GAME", COL_BLACK, 1);
 	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 342,
 		"ESC  BACK", COL_GRAY, 1);
 	Platform_Blit2Screen();
@@ -827,10 +872,11 @@ static void DrawPlayerCountPicker(int selected, const char *title)
 
 static int ChoosePlayerCount(int minimum, const char *title)
 {
-	int selected = gPrefs.localPlayerCount;
-	if (selected < minimum || selected > kLocalPlayerCount)
+	static int sLanPlayerCount = 2;
+	int selected = sLanPlayerCount;
+	if (selected < minimum || selected > kNetworkMaxPlayers)
 		selected = minimum;
-	DrawPlayerCountPicker(selected, title);
+	DrawPlayerCountPicker(selected, minimum, title);
 	for (;;) {
 		int x, y;
 		Platform_PollEvents();
@@ -842,32 +888,29 @@ static int ChoosePlayerCount(int minimum, const char *title)
 			return 0;
 		if (Platform_WasKeyPressed(SDL_SCANCODE_LEFT) ||
 			Platform_WasKeyPressed(SDL_SCANCODE_A))
-			selected = selected <= minimum ? kLocalPlayerCount : selected - 1;
+			selected = selected <= minimum ? kNetworkMaxPlayers : selected - 1;
 		if (Platform_WasKeyPressed(SDL_SCANCODE_RIGHT) ||
 			Platform_WasKeyPressed(SDL_SCANCODE_D))
-			selected = selected >= kLocalPlayerCount ? minimum : selected + 1;
+			selected = selected >= kNetworkMaxPlayers ? minimum : selected + 1;
 		if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
 			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER))
-			return selected;
+			return sLanPlayerCount = selected;
 		if (Platform_GetMouseClick(&x, &y)) {
-			int player;
-			for (player = 1; player <= kLocalPlayerCount; ++player) {
-				int buttonX = 148 + (player - 1) * 86;
-				if (player >= minimum && x >= buttonX && x < buttonX + 72 &&
-					y >= 194 && y < 266) {
-					selected = player;
+			int count;
+			for (count = minimum; count <= kNetworkMaxPlayers; ++count) {
+				int buttonX = CountButtonX(count, minimum);
+				if (x >= buttonX && x < buttonX + kCountButtonW &&
+					y >= kCountButtonY && y < kCountButtonY + kCountButtonH) {
+					selected = count;
 					break;
 				}
 			}
-			if (x >= 216 && x < 424 && y >= 286 && y < 324) {
-				if (selected < minimum)
-					selected = minimum;
-				return selected;
-			}
+			if (x >= 216 && x < 424 && y >= 286 && y < 324)
+				return sLanPlayerCount = selected;
 			if (y >= 330 && y < 358)
 				return 0;
 		}
-		DrawPlayerCountPicker(selected, title);
+		DrawPlayerCountPicker(selected, minimum, title);
 		SDL_Delay(16);
 	}
 }
@@ -904,17 +947,28 @@ static void DrawLobbySettings(tPixel *fb, int stride, int y, int isClient)
 
 static void DrawLobbyDrivers(tPixel *fb, int stride, int y)
 {
-	int slot;
+	int slot, drivers = 0, row = 0;
+	for (slot = 0; slot < kNetworkMaxPlayers; ++slot)
+		if (Network_GetSlotName(slot))
+			drivers++;
 	for (slot = 0; slot < kNetworkMaxPlayers; ++slot) {
 		const char *name = Network_GetSlotName(slot);
+		UInt16 color = slot == Network_GetLocalSlot() ? COL_YELLOW : COL_WHITE;
 		char line[48];
 		if (!name)
 			continue;
-		snprintf(line, sizeof(line), "%d  %-15s %s", slot + 1, name,
-			Vehicle_Name(Network_GetPlayerVehicle(slot)));
-		TR_DrawString(fb, stride, 150, y, line,
-			slot == Network_GetLocalSlot() ? COL_YELLOW : COL_WHITE, 1);
-		y += 15;
+		if (drivers <= 4) {
+			snprintf(line, sizeof(line), "%d  %-15s %s", slot + 1, name,
+				Vehicle_Name(Network_GetPlayerVehicle(slot)));
+			TR_DrawString(fb, stride, 150, y + row * 15, line, color, 1);
+		} else {
+			/* Up to ten drivers: two columns of five. */
+			snprintf(line, sizeof(line), "%2d %-10.10s %.12s", slot + 1, name,
+				Vehicle_Name(Network_GetPlayerVehicle(slot)));
+			TR_DrawString(fb, stride, row < 5 ? 122 : 322, y + (row % 5) * 13,
+				line, color, 1);
+		}
+		row++;
 	}
 }
 
@@ -939,6 +993,90 @@ static void HandleVehiclePicker(int clickX, int clickY, int pickerY)
 		step = clickX < SCREEN_WIDTH / 2 ? -1 : 1;
 	if (step)
 		Network_SetLocalVehicle(Vehicle_ID(index + step));
+}
+
+/* Lobby name field: N or a click edits this computer's driver name, which
+   the others see in their lobby and over the car during the race. */
+static int sNameEditing;
+
+static void LocalName(char name[16])
+{
+	int length = gPrefs.playerNames[0][0];
+	if (length > 15)
+		length = 15;
+	memcpy(name, gPrefs.playerNames[0] + 1, (size_t)length);
+	name[length] = '\0';
+}
+
+static void DrawNameField(tPixel *fb, int stride, int y)
+{
+	char name[16], line[48];
+	LocalName(name);
+	if (sNameEditing) {
+		TR_FillRect(fb, stride, 150, y - 3, 340, 15, COL_DKGRAY);
+		snprintf(line, sizeof(line), "YOUR NAME: %s%s   ENTER: OK", name,
+			(SDL_GetTicks64() / 400) & 1 ? "_" : " ");
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, y, line, COL_GREEN, 1);
+	} else {
+		snprintf(line, sizeof(line), "YOUR NAME: %s   (N: CHANGE)",
+			name[0] ? name : "DRIVER");
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, y, line, COL_WHITE, 1);
+	}
+}
+
+static void StopNameEdit(void)
+{
+	if (!sNameEditing)
+		return;
+	sNameEditing = 0;
+	Platform_StopTextEntry();
+	WritePrefs(0);
+}
+
+/* Returns 1 while the name is being typed: the lobby then ignores its other
+   keys (ESC, V, arrows). */
+static int HandleNameField(int clickX, int clickY, int y)
+{
+	int clickedField = clickY >= y - 4 && clickY < y + 12 &&
+		clickX >= 150 && clickX < 490;
+	if (!sNameEditing) {
+		if (clickedField || Platform_WasKeyPressed(SDL_SCANCODE_N)) {
+			sNameEditing = 1;
+			Platform_StartTextEntry();
+			return 1;
+		}
+		return 0;
+	}
+	{
+		char name[16], typed[16];
+		size_t length;
+		int changed = 0;
+		LocalName(name);
+		length = strlen(name);
+		if (Platform_TakeTypedText(typed, sizeof(typed)) && length < 15) {
+			size_t add = strlen(typed);
+			if (length + add > 15)
+				add = 15 - length;
+			memcpy(name + length, typed, add);
+			length += add;
+			name[length] = '\0';
+			changed = 1;
+		}
+		if (Platform_WasKeyTyped(SDL_SCANCODE_BACKSPACE) && length) {
+			name[--length] = '\0';
+			changed = 1;
+		}
+		if (changed)
+			Network_SetLocalName(name);
+	}
+	if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+		Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER) ||
+		Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE) ||
+		(clickY >= 0 && !clickedField)) {
+		StopNameEdit();
+		Platform_FlushInput();
+	}
+	return 1;
 }
 
 static void DrawLanViewChoice(tPixel *fb, int stride, int y)
@@ -973,13 +1111,14 @@ static void DrawLanLobby(int targetPlayers, int connectedPlayers)
 	DrawLobbySettings(fb, stride, 106, 0);
 	DrawLobbyDrivers(fb, stride, 166);
 	DrawVehiclePicker(fb, stride, kHostPickerY);
+	DrawNameField(fb, stride, 269);
 	{
 		char address[16], line[56];
 		if (Network_GetLocalAddress(address, sizeof(address)))
 			snprintf(line, sizeof(line), "OTHERS: JOIN LAN GAME (OR IP %s)", address);
 		else
 			snprintf(line, sizeof(line), "OTHERS: CHOOSE JOIN LAN GAME");
-		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 286, line, COL_GRAY, 1);
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 287, line, COL_GRAY, 1);
 	}
 	DrawLanViewChoice(fb, stride, 300);
 	if (connectedPlayers >= targetPlayers) {
@@ -1000,7 +1139,7 @@ static void DrawLanLobby(int targetPlayers, int connectedPlayers)
 static int WaitForLanPlayers(int targetPlayers)
 {
 	for (;;) {
-		int x, y, connected;
+		int x, y, connected, clicked;
 		Platform_PollEvents();
 		Network_Poll();
 		if (Platform_ShouldQuit()) {
@@ -1010,6 +1149,12 @@ static int WaitForLanPlayers(int targetPlayers)
 		connected = Network_GetPlayerCount();
 		Network_Publish();	/* clients see the drivers and vehicles */
 		DrawLanLobby(targetPlayers, connected);
+		x = y = -1;
+		clicked = Platform_GetMouseClick(&x, &y);
+		if (HandleNameField(x, y, 269)) {
+			SDL_Delay(16);
+			continue;
+		}
 		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
 			return 0;
 		HandleVehiclePicker(-1, -1, kHostPickerY);
@@ -1019,7 +1164,7 @@ static int WaitForLanPlayers(int targetPlayers)
 			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER)) &&
 			connected >= targetPlayers)
 			return 1;
-		if (Platform_GetMouseClick(&x, &y)) {
+		if (clicked) {
 			HandleVehiclePicker(x, y, kHostPickerY);
 			if (y >= kHostStartY && y < kHostStartY + 40 && x >= 216 && x < 424 &&
 				connected >= targetPlayers)
@@ -1145,6 +1290,7 @@ static void DrawClientLobby(const char *address, UInt64 waitedMS)
 		DrawLobbySettings(fb, stride, 120, 1);
 		DrawLobbyDrivers(fb, stride, 180);
 		DrawVehiclePicker(fb, stride, kClientPickerY);
+		DrawNameField(fb, stride, 286);
 		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 306,
 			"WAITING FOR THE HOST TO START THE RACE", COL_YELLOW, 1);
 		DrawLanViewChoice(fb, stride, 326);
@@ -1177,16 +1323,20 @@ static int WaitInClientLobby(const char *address)
 			gExit = true;
 			return 0;
 		}
-		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
-			return 0;
 		{
 			int x = -1, y = -1;
 			int clicked = Platform_GetMouseClick(&x, &y);
-			if (clicked && y >= 394 && y < 414)
-				return 0;
-			HandleVehiclePicker(x, y, kClientPickerY);
-			if (Platform_WasKeyPressed(SDL_SCANCODE_V))
-				Prefs_ToggleLanScreen();
+			if (Network_GetLocalSlot() > 0 && HandleNameField(x, y, 286)) {
+				/* typing: no lobby keys */
+			} else {
+				if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+					return 0;
+				if (clicked && y >= 394 && y < 414)
+					return 0;
+				HandleVehiclePicker(x, y, kClientPickerY);
+				if (Platform_WasKeyPressed(SDL_SCANCODE_V))
+					Prefs_ToggleLanScreen();
+			}
 		}
 		Network_Poll();
 		if (gGameOn || gExit)
@@ -1279,7 +1429,9 @@ static void StartMultiplayer(int shiftHeld)
 		if (playerCount > 1)
 			Network_EnableLocalPlayers(playerCount);
 		Network_SetSoloModes(1);	/* until EndGame */
+		gStartLevel = Prefs_GetStartLevel();
 		StartGame(shiftHeld);
+		gStartLevel = 0;
 		return;
 	}
 	if (mode == 1) {
@@ -1293,8 +1445,13 @@ static void StartMultiplayer(int shiftHeld)
 			return;
 		}
 		Network_SetLobbyPlayerLimit(targetPlayers);
-		if (WaitForLanPlayers(targetPlayers))
+		int ready = WaitForLanPlayers(targetPlayers);
+		StopNameEdit();
+		if (ready) {
+			gStartLevel = Prefs_GetStartLevel();
 			StartGame(shiftHeld);
+			gStartLevel = 0;
+		}
 		else {
 			Network_Shutdown();
 			RestoreMenuScreen();
@@ -1314,7 +1471,9 @@ static void StartMultiplayer(int shiftHeld)
 			RestoreMenuScreen();
 			return;
 		}
-		if (!WaitInClientLobby(address)) {
+		int joined = WaitInClientLobby(address);
+		StopNameEdit();
+		if (!joined) {
 			Network_Shutdown();
 			RestoreMenuScreen();
 		}
