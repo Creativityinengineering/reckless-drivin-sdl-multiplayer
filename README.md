@@ -16,13 +16,13 @@
 
 ---
 
-<img src="screenshots/multiplayer.gif" width="800" alt="Animated: four drivers racing in split screen on level 1 with an oil slick, clear road, nitro and super grip">
-
-*Multiplayer Edition: four drivers in split screen, up to ten on a LAN*
-
 <img src="screenshots/start-screen.jpg" width="720" alt="Reckless Drivin' start screen with the license-plate menu">
 
 *640x480 software-rendered, pixel-perfect; just like it was in 2000*
+
+<img src="screenshots/multiplayer.gif" width="800" alt="Animated: four drivers in split screen, each somewhere else on the road: crates on a country road, a police chase on the toll bridge, wildlife mode in the desert">
+
+*Multiplayer Edition: four drivers in split screen, up to ten on a LAN*
 
 </div>
 
