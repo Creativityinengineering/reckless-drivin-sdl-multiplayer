@@ -95,6 +95,10 @@ player stays as it was; the original traffic and add-ons are one setting away
 
 - **Local and LAN multiplayer** for up to four drivers, split screen or own
   screen, each with their own car, controls, lives, score and finish result
+- **Own sound for every driver:** in split screen each driver has their own
+  engine and skid sounds, coming from their side of the screen, and sounds in
+  the world are heard from the closest driver; on a LAN every computer plays
+  its own driver
 - **LAN host search:** joining lists the hosts on the network, no IP typing
 - **One shared world:** the host simulates traffic, cops and pickups, so every
   computer sees the same cars, dents, skid marks, explosions and packages

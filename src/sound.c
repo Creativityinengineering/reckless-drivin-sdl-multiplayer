@@ -16,6 +16,7 @@
 #include "packs.h"
 #include "random.h"
 #include "vec2d.h"
+#include "netgame.h"
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -67,8 +68,49 @@ int   gGear;
 
 static UInt32 sChannelPriority[kNumSoundChannels];
 static int sAudioInited = 0;
-static int sEngineNeedsRetrigger = 1;
-static int sSkidNeedsRetrigger   = 1;
+/* Per driver on this computer: own engine and skid loops and own gears. */
+static int sEngineNeedsRetrigger[kAudioCarChannels] = {1, 1, 1, 1};
+static int sSkidNeedsRetrigger[kAudioCarChannels]   = {1, 1, 1, 1};
+static int sGear[kAudioCarChannels];
+
+static void RetriggerAllCars(void)
+{
+    int car;
+    for (car = 0; car < kAudioCarChannels; car++) {
+        sEngineNeedsRetrigger[car] = 1;
+        sSkidNeedsRetrigger[car] = 1;
+    }
+}
+
+/* How many drivers play on this computer (split screen) and which one is
+   bound now. */
+static int CarSoundCount(void)
+{
+    int count = Network_IsLocalMultiplayer() ? Network_GetLocalDriverCount() : 1;
+    return count < 1 ? 1 : (count > kAudioCarChannels ? kAudioCarChannels : count);
+}
+
+static int CarSoundIndex(void)
+{
+    int slot = Network_GetLocalDriverSlot(gPlayerObj);
+    return slot >= 0 && slot < CarSoundCount() ? slot : 0;
+}
+
+/* Split screen: a driver's own sounds come from his side of the screen
+   (views are laid out in two columns). */
+static float ViewPan(int car)
+{
+    if (CarSoundCount() < 2)
+        return 0.0f;
+    return car % 2 ? 0.55f : -0.55f;
+}
+
+static void SetPannedVolume(int channel, float volume, float pan)
+{
+    Platform_SetChannelVolume(channel, volume * (pan > 0 ? 1.0f - pan : 1.0f),
+        volume * (pan < 0 ? 1.0f + pan : 1.0f));
+}
+
 
 /* ======================================================================== */
 /* Helpers: read big-endian tSound fields                                    */
@@ -311,8 +353,7 @@ void InitChannels(void)
     for (int i = 0; i < kNumSoundChannels; i++)
         sChannelPriority[i] = 0;
 
-    sEngineNeedsRetrigger = 1;
-    sSkidNeedsRetrigger   = 1;
+    RetriggerAllCars();
 }
 
 void BeQuiet(void)
@@ -321,11 +362,10 @@ void BeQuiet(void)
         Platform_StopChannel(kAudioChannel0 + i);
         sChannelPriority[i] = 0;
     }
-    Platform_StopChannel(kAudioChannelEngine);
-    Platform_StopChannel(kAudioChannelSkid);
+    for (int ch = kAudioChannelEngine; ch < kNumAudioChannels; ch++)
+        Platform_StopChannel(ch);
 
-    sEngineNeedsRetrigger = 1;
-    sSkidNeedsRetrigger   = 1;
+    RetriggerAllCars();
 }
 
 /* ======================================================================== */
@@ -357,6 +397,22 @@ static int PickChannel(UInt32 *outPriority)
 /* Engine / skid continuous sound                                            */
 /* ======================================================================== */
 
+static void StartLoop(int channel, int soundId)
+{
+    int entrySize;
+    tSound *sound = (tSound *)GetSortedPackEntry(kPackSnds, soundId, &entrySize);
+    if (sound) {
+        int sampleLen, bps;
+        float pitchAdj;
+        UInt32 ns = SoundNumSamples(sound);
+        int idx = (ns > 0) ? RanInt(0, ns) : 0;
+        const UInt8 *sampleData = GetSampleData(sound, idx, entrySize,
+                                                &sampleLen, &pitchAdj, &bps);
+        if (sampleData && sampleLen > 0)
+            Platform_PlaySound(channel, sampleData, sampleLen, 0.0f, 0.0f, pitchAdj, bps);
+    }
+}
+
 void SetCarSound(float engine, float skidL, float skidR, float velo)
 {
     if (!gPrefs.sound)
@@ -364,25 +420,33 @@ void SetCarSound(float engine, float skidL, float skidR, float velo)
     if (!gPrefs.engineSound && !gPrefs.skidSound)
         return;
 
+    /* The bound driver's own loops: in split screen every driver has one. */
+    int car = CarSoundIndex();
+    int engineChannel = kAudioChannelEngine + 2 * car;
+    int skidChannel = kAudioChannelSkid + 2 * car;
+    float pan = ViewPan(car);
+    /* Several engines at once: each a little quieter. */
+    float mix = CarSoundCount() > 1 ? 0.7f : 1.0f;
     float engineVol, gearVelo;
 
     if (!(*gRoadInfo).water) {
         float highestGear = (gCurPlayer->addOns & kAddOnTurbo)
                             ? kHighestGearTurbo : kHighestGear;
-        while (velo > (gGear + 1) * highestGear / kNumGears + kShiftTolerance
-               && (gGear + 1) < kNumGears)
-            gGear++;
-        while (velo < gGear * highestGear / kNumGears - kShiftTolerance
-               && gGear > 0)
-            gGear--;
+        while (velo > (sGear[car] + 1) * highestGear / kNumGears + kShiftTolerance
+               && (sGear[car] + 1) < kNumGears)
+            sGear[car]++;
+        while (velo < sGear[car] * highestGear / kNumGears - kShiftTolerance
+               && sGear[car] > 0)
+            sGear[car]--;
 
-        gearVelo = fabsf(velo) / highestGear * kNumGears - gGear;
+        gearVelo = fabsf(velo) / highestGear * kNumGears - sGear[car];
         velo /= kMaxNoiseVelo;
         if (gearVelo > 2) gearVelo = 2;
     } else {
         velo /= kMaxNoiseVelo;
         gearVelo = (engine + velo) / 2;
     }
+    gGear = sGear[0];
 
     velo = fabsf(velo);
 
@@ -392,30 +456,16 @@ void SetCarSound(float engine, float skidL, float skidR, float velo)
         engineVol = 0;
 
     /* Re-trigger engine loop if needed */
-    if (gPrefs.engineSound && sEngineNeedsRetrigger) {
-        int entrySize;
-        tSound *sound = (tSound *)GetSortedPackEntry(kPackSnds, 132, &entrySize);
-        if (sound) {
-            int sampleLen, bps;
-            float pitchAdj;
-            UInt32 ns = SoundNumSamples(sound);
-            int idx = (ns > 0) ? RanInt(0, ns) : 0;
-            const UInt8 *sampleData = GetSampleData(sound, idx, entrySize,
-                                                    &sampleLen, &pitchAdj, &bps);
-            if (sampleData && sampleLen > 0) {
-                Platform_PlaySound(kAudioChannelEngine, sampleData, sampleLen,
-                                   engineVol * gVolume, 0.0f, pitchAdj, bps);
-                sEngineNeedsRetrigger = 0;
-            }
-        }
+    if (gPrefs.engineSound && sEngineNeedsRetrigger[car]) {
+        StartLoop(engineChannel, 132);
+        sEngineNeedsRetrigger[car] = 0;
     }
 
     /* Set engine volume and pitch */
     if (gPrefs.engineSound) {
-        float vol = 0.28f * engineVol * gVolume;
-        Platform_SetChannelVolume(kAudioChannelEngine, vol, vol);
+        SetPannedVolume(engineChannel, 0.28f * engineVol * gVolume * mix, pan);
         float pitch = 0.2f + 0.3f * engine + 0.2f * velo + 0.3f * gearVelo;
-        Platform_SetChannelPitch(kAudioChannelEngine, pitch);
+        Platform_SetChannelPitch(engineChannel, pitch);
     }
 
     if (!gPrefs.skidSound)
@@ -433,37 +483,26 @@ void SetCarSound(float engine, float skidL, float skidR, float velo)
     else if (skidR > 1) skidR = 1;
 
     /* Re-trigger skid loop if needed */
-    if (sSkidNeedsRetrigger) {
-        int skidEntrySize;
-        tSound *sound = (tSound *)GetSortedPackEntry(kPackSnds,
-                            (*gRoadInfo).skidSound, &skidEntrySize);
-        if (sound) {
-            int sampleLen, bps;
-            float pitchAdj;
-            UInt32 ns = SoundNumSamples(sound);
-            int idx = (ns > 0) ? RanInt(0, ns) : 0;
-            const UInt8 *sampleData = GetSampleData(sound, idx, skidEntrySize,
-                                                    &sampleLen, &pitchAdj, &bps);
-            if (sampleData && sampleLen > 0) {
-                Platform_PlaySound(kAudioChannelSkid, sampleData, sampleLen,
-                                   0.0f, 0.0f, pitchAdj, bps);
-                sSkidNeedsRetrigger = 0;
-            }
-        }
+    if (sSkidNeedsRetrigger[car]) {
+        StartLoop(skidChannel, (*gRoadInfo).skidSound);
+        sSkidNeedsRetrigger[car] = 0;
     }
 
-    /* Set skid volume and pitch */
+    /* Set skid volume and pitch: the car's own left/right wheels, moved to
+       the driver's side of the screen in split screen. */
     {
-        float volL = skidL * gVolume * (velo * 0.5f + 0.5f);
-        float volR = skidR * gVolume * (velo * 0.5f + 0.5f);
-        Platform_SetChannelVolume(kAudioChannelSkid, volL, volR);
+        float volL = skidL * gVolume * (velo * 0.5f + 0.5f) * mix;
+        float volR = skidR * gVolume * (velo * 0.5f + 0.5f) * mix;
+        Platform_SetChannelVolume(skidChannel,
+            volL * (pan > 0 ? 1.0f - pan : 1.0f) + (pan < 0 ? volR * -pan : 0.0f),
+            volR * (pan < 0 ? 1.0f + pan : 1.0f) + (pan > 0 ? volL * pan : 0.0f));
 
         float skidPitch;
         if (skidL + skidR)
             skidPitch = -1.0f / ((skidL + skidR) * 0.25f + velo * 0.5f - 2.0f);
         else
             skidPitch = 0.0f;
-        Platform_SetChannelPitch(kAudioChannelSkid, skidPitch);
+        Platform_SetChannelPitch(skidChannel, skidPitch);
     }
 }
 
@@ -473,50 +512,49 @@ void SetCarSound(float engine, float skidL, float skidR, float velo)
 
 void StartCarChannels(void)
 {
-    Platform_StopChannel(kAudioChannelEngine);
-    Platform_StopChannel(kAudioChannelSkid);
+    int car;
+    for (int ch = kAudioChannelEngine; ch < kNumAudioChannels; ch++)
+        Platform_StopChannel(ch);
+    RetriggerAllCars();
 
-    sEngineNeedsRetrigger = 1;
-    sSkidNeedsRetrigger   = 1;
+    /* One engine and one skid loop for every driver on this computer. */
+    for (car = 0; car < CarSoundCount(); car++) {
+        if (gPrefs.sound && gPrefs.engineSound) {
+            StartLoop(kAudioChannelEngine + 2 * car, 132);
+            sEngineNeedsRetrigger[car] = 0;
+        }
+        if (gPrefs.sound && gPrefs.skidSound) {
+            StartLoop(kAudioChannelSkid + 2 * car, (*gRoadInfo).skidSound);
+            sSkidNeedsRetrigger[car] = 0;
+        }
+        Platform_SetChannelVolume(kAudioChannelEngine + 2 * car, 0, 0);
+        Platform_SetChannelVolume(kAudioChannelSkid + 2 * car, 0, 0);
+    }
+}
 
-    if (gPrefs.sound && gPrefs.engineSound) {
-        int engEntrySize;
-        tSound *sound = (tSound *)GetSortedPackEntry(kPackSnds, 132, &engEntrySize);
-        if (sound) {
-            int sampleLen, bps;
-            float pitchAdj;
-            UInt32 ns = SoundNumSamples(sound);
-            int idx = (ns > 0) ? RanInt(0, ns) : 0;
-            const UInt8 *sampleData = GetSampleData(sound, idx, engEntrySize,
-                                                    &sampleLen, &pitchAdj, &bps);
-            if (sampleData && sampleLen > 0) {
-                Platform_PlaySound(kAudioChannelEngine, sampleData, sampleLen,
-                                   0.0f, 0.0f, pitchAdj, bps);
-                sEngineNeedsRetrigger = 0;
-            }
+/* The ears for a sound in the world: in split screen the driver closest to
+   it, whose side of the screen it then comes from. */
+static const tObject *Listener(t2DPoint pos, float *viewPan)
+{
+    const tObject *best = gCameraObj;
+    float bestDistance = 1e30f;
+    int car, count = CarSoundCount();
+    *viewPan = 0.0f;
+    if (count < 2)
+        return gCameraObj;
+    for (car = 0; car < count; car++) {
+        const tObject *driver = Network_GetLocalDriverObject(car);
+        float distance;
+        if (!driver)
+            continue;
+        distance = VEC2D_Value(VEC2D_Difference(pos, driver->pos));
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = driver;
+            *viewPan = ViewPan(car);
         }
     }
-
-    if (gPrefs.sound && gPrefs.skidSound) {
-        int skidEntrySize;
-        tSound *sound = (tSound *)GetSortedPackEntry(kPackSnds,
-                    (*gRoadInfo).skidSound, &skidEntrySize);
-        if (sound) {
-            int sampleLen, bps;
-            float pitchAdj;
-            UInt32 ns = SoundNumSamples(sound);
-            int idx = (ns > 0) ? RanInt(0, ns) : 0;
-            const UInt8 *sampleData = GetSampleData(sound, idx, skidEntrySize,
-                                                    &sampleLen, &pitchAdj, &bps);
-            if (sampleData && sampleLen > 0) {
-                Platform_PlaySound(kAudioChannelSkid, sampleData, sampleLen,
-                                   0.0f, 0.0f, pitchAdj, bps);
-                sSkidNeedsRetrigger = 0;
-            }
-        }
-    }
-
-    SetCarSound(0, 0, 0, 0);
+    return best;
 }
 
 /* ======================================================================== */
@@ -547,20 +585,24 @@ void PlaySound(t2DPoint pos, t2DPoint velo, float freq, float vol, int id)
             return;
     }
 
-    float dist = 1.0f - VEC2D_Value(VEC2D_Difference(pos, gCameraObj->pos))
+    float viewPan;
+    const tObject *listener = Listener(pos, &viewPan);
+    float dist = 1.0f - VEC2D_Value(VEC2D_Difference(pos, listener->pos))
                         * (1.0f / kMaxListenDist);
     if (dist <= 0)
         return;
 
     sChannelPriority[chanIdx] = soundPri;
 
-    float pan = (pos.x - gCameraObj->pos.x) * (1.0f / kMaxPanDist);
+    float pan = (pos.x - listener->pos.x) * (1.0f / kMaxPanDist);
+    if (viewPan)
+        pan = viewPan + pan * 0.45f;	/* split screen: from that view's side */
     if (pan > 1.0f)  pan = 1.0f;
     if (pan < -1.0f) pan = -1.0f;
 
     if (gPrefs.hqSound) {
-        t2DPoint veloDiff = VEC2D_Difference(velo, gCameraObj->velo);
-        t2DPoint spaceDiff = VEC2D_Norm(VEC2D_Difference(gCameraObj->pos, pos));
+        t2DPoint veloDiff = VEC2D_Difference(velo, listener->velo);
+        t2DPoint spaceDiff = VEC2D_Norm(VEC2D_Difference(listener->pos, pos));
         freq *= powf(2.0f, VEC2D_DotProduct(veloDiff, spaceDiff) * kDopplerFactor);
     }
 

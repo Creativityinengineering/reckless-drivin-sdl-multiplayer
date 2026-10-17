@@ -87,11 +87,15 @@ int  Platform_IsChannelActive(int channelId);
 void Platform_SetChannelVolume(int channelId, float left, float right);
 void Platform_SetChannelPitch(int channelId, float pitch);
 
+/* Engine and skid loops: one pair per driver playing on this computer (up
+   to four in split screen); driver n uses kAudioChannelEngine + 2 * n and
+   kAudioChannelSkid + 2 * n. */
+#define kAudioCarChannels 4
 enum {
     kAudioChannel0 = 0,
     kAudioChannelEngine = 16,
     kAudioChannelSkid,
-    kNumAudioChannels
+    kNumAudioChannels = kAudioChannelEngine + 2 * kAudioCarChannels
 };
 
 #define kNumSFXChannels 16  /* SFX channels: 0 through 15 */

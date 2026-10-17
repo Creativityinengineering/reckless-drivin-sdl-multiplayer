@@ -95,18 +95,21 @@ static int FindTrafficTypes(int *ids,int max)
    Placed by the host only on a LAN (clients get its). */
 static void AddPackages(float gap)
 {
-	tPackHeader *pack=(tPackHeader*)*gPacks[kPackObTy];
-	int count=SWAP16S(pack[0].id),i,typeCount=0;
-	int types[16];
+	/* The same package as the level's own (the game data has more than one
+	   look); without any in the level, the usual crate, or the one for water. */
+	tObject *theObj=(tObject*)gFirstObj->next;
+	int packageType=(*gRoadInfo).water?255:158;
 	float y;
-	for(i=1;i<=count&&typeCount<16;i++)
+	while(theObj!=gFirstObj)
 	{
-		int id=SWAP16S(pack[i].id);
-		tObjectTypePtr type=(tObjectTypePtr)GetUnsortedPackEntry(kPackObTy,id,nil);
-		if(type&&type->flags&kObjectBonusFlag&&type->flags2&kObjectAddOnFlag)
-			types[typeCount++]=id;
+		if(theObj->type->flags&kObjectBonusFlag&&theObj->type->flags2&kObjectAddOnFlag)
+		{
+			packageType=theObj->typeRes;
+			break;
+		}
+		theObj=(tObject*)theObj->next;
 	}
-	if(!typeCount)
+	if(!GetUnsortedPackEntry(kPackObTy,packageType,nil))
 		return;
 	for(y=900;y<gLevelData->levelEnd-300;y+=gap+RanFl(-60,60))
 	{
@@ -121,7 +124,7 @@ static void AddPackages(float gap)
 		}
 		if(right-left<0)
 			continue;
-		package=NewObject(gFirstObj,types[RanInt(0,typeCount)]);
+		package=NewObject(gFirstObj,packageType);
 		if(!package)
 			continue;
 		package->pos=P2D(RanFl(left,right),y);

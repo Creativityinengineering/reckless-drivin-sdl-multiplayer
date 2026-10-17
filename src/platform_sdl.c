@@ -1200,8 +1200,7 @@ void Platform_PlaySound(int channelId, const void *sampleData, int sampleLen,
         c->gamePitch    = 1.0f;
         c->bitsPerSample = bitsPerSample;
         c->active       = 1;
-        c->looping      = (channelId == kAudioChannelEngine ||
-                           channelId == kAudioChannelSkid) ? 1 : 0;
+        c->looping      = channelId >= kAudioChannelEngine ? 1 : 0;	/* car loops */
     }
     SDL_UnlockMutex(sMixMutex);
 }
