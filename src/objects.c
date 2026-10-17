@@ -702,6 +702,8 @@ static inline void MoveObject(tObject *theObj)
 			float vol=-theObj->jumpVelo*0.018;
 			theObj->jumpHeight=0;
 			theObj->jumpVelo=0;
+			if(gRouteActive)	/* landed on a bridge or below it */
+				Route_Landed(theObj);
 			PlaySound(theObj->pos,theObj->velo,1.0,vol>1.0?1.0:vol,137);
 			if(theObj==gCameraObj)
 				FFBJolt(1,1,0.4);

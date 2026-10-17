@@ -384,6 +384,7 @@ void NitroFlame(tObject *car)
 	t2DPoint back=P2D(-sin(car->dir),-cos(car->dir));
 	tObject *flame=NewObject(car,1001);
 	if(!flame) return;
+	flame->onBridge=car->onBridge;	/* a bridge or the road below: the car's */
 	flame->netLocal=1;
 	flame->pos=VEC2D_Sum(car->pos,VEC2D_Scale(back,(*car->type).length*kScale+6));
 	flame->pos=VEC2D_Sum(flame->pos,P2D(RanFl(-4,4),RanFl(-4,4)));
@@ -419,12 +420,14 @@ void ObjectPhysics(tObject *theObj)
 		FallDamage(theObj);
 		theObj->velo=VEC2D_Scale(theObj->velo,0.7f);
 		theObj->rotVelo*=0.5f;
-		/* a short flight down: drawn as a jump, then the landing thud and
-		   jolt of an ordinary jump */
-		theObj->jumpHeight=6;
-		theObj->jumpVelo=9;
-		PlaySound(theObj->pos,theObj->velo,1.0,0.8,141);
+		/* the drop from the deck: it starts high (drawn bigger) and comes
+		   down fast, landing with the loud thud and jolt of a big jump */
+		theObj->jumpHeight=8;
+		theObj->jumpVelo=-38;
 	}
+	if(gRouteActive&&!theObj->replica&&theObj->type->flags&kObjectWheelFlag&&
+		Route_WallBelow(theObj)&&theObj==gPlayerObj)
+		FFBJolt(0.5,0.5,0.2);
 	if(!theObj->jumpHeight||theObj->type->flags&kObjectHeliFlag)
 	{
 		if(theObj->type->flags&kObjectWheelFlag)

@@ -227,6 +227,8 @@ int Route_Level(t2DPoint pos, float dir)
 	return 0;
 }
 
+int Route_UpdateLevel(void *object);
+
 int Route_ObjectLevel(const void *object)
 {
 	const tObject *obj = (const tObject *)object;
@@ -234,13 +236,11 @@ int Route_ObjectLevel(const void *object)
 		return 0;
 	if (obj->shooter && obj->type->flags2 & kObjectMissile)	/* a weapon: its shooter's level */
 		obj = (const tObject *)obj->shooter;
-	/* cars that drive here know (they may have fallen off); copies from
-	   the host and everything else: from where they are and point */
-	if (obj->type->flags & kObjectWheelFlag && !obj->replica && obj->onBridge)
+	/* the level it took when it came into the crossing (see below) */
+	Route_UpdateLevel((void *)obj);
+	if (obj->onBridge)
 		return obj->onBridge == 1;
-	if (obj->onBridge == 2)
-		return 0;
-	return Route_Level(obj->pos, obj->dir);
+	return 0;
 }
 
 int Route_SameLevel(const void *a, const void *b)
@@ -519,18 +519,31 @@ void Route_DrawBridges(float xDrawStart, float yDrawStart, float zoom)
 		}
 	}
 	DrawRouteDeck16(xDrawStart, yDrawStart, zoom);
-	/* concrete: the deck a little lighter than the road */
+	/* concrete: the deck a little lighter than the road, fading in from
+	   the bridge's ends so the surface does not change at a line */
 	for (sy = 0; sy < gYSize; ++sy) {
 		float worldY = yDrawStart - sy * zoom;
 		const SInt16 *spans;
-		int count = Route_RowSpans((int)(worldY / 2), 1, &spans), k;
+		int count = Route_RowSpans((int)(worldY / 2), 1, &spans), k, c;
+		const tCrossing *crossing = NULL;
+		for (c = 0; c < sCrossingCount; ++c)
+			if (fabsf(worldY - sCrossings[c].y) <= sCrossings[c].half + 200)
+				crossing = &sCrossings[c];
+		if (!crossing)
+			continue;
 		for (k = 0; k < count; ++k) {
 			int x0 = (int)((spans[2 * k] - xDrawStart) / zoom), x1 = (int)((spans[2 * k + 1] - xDrawStart) / zoom), x;
 			tPixel *row = fb + sy * stride;
 			if (x0 < 0) x0 = 0;
 			if (x1 > gXSize) x1 = gXSize;
-			for (x = x0; x < x1; ++x)
-				row[x] = BlendAlpha(PixelRGB(235, 228, 210), row[x], 55);
+			for (x = x0; x < x1; ++x) {
+				float worldX = xDrawStart + x * zoom;
+				float along = (worldX - crossing->x) * crossing->bridgeX + (worldY - crossing->y) * crossing->bridgeY;
+				float fade = (crossing->deckHalf - fabsf(along)) / 80;
+				if (fade <= 0)
+					continue;
+				row[x] = BlendAlpha(PixelRGB(235, 228, 210), row[x], (UInt32)(55 * (fade > 1 ? 1 : fade)));
+			}
 		}
 	}
 	DrawDashes(1, xDrawStart, yDrawStart, zoom);
@@ -639,10 +652,13 @@ float Route_BridgeS(int index)
 	return -1;
 }
 
-/* Cars on a free-form road's crossings: onBridge 1 while on a bridge, 2
-   after falling off it onto the road below (until out of the crossing).
-   Returns 1 at the moment a car falls off a bridge's side. */
-int Route_FellOffBridge(void *object)
+/* Which level an object is on where the road crosses itself: decided once
+   when it comes into the crossing (by which road it points along) and kept
+   until it leaves, so a car skidding or turning below the bridge stays
+   below. onBridge: 0 outside every crossing, 1 on the bridge, 2 below,
+   3 just went over the bridge's side (below; the car's physics then drops
+   it onto the road, see Route_FellOffBridge). */
+int Route_UpdateLevel(void *object)
 {
 	tObject *obj = (tObject *)object;
 	int i;
@@ -650,30 +666,103 @@ int Route_FellOffBridge(void *object)
 		return 0;
 	for (i = 0; i < sCrossingCount; ++i) {
 		const tCrossing *c = &sCrossings[i];
-		float dx = obj->pos.x - c->x, dy = obj->pos.y - c->y;
-		float along = dx * c->bridgeX + dy * c->bridgeY;
-		float across = dx * c->bridgeY - dy * c->bridgeX;
-		if (fabsf(dx) > c->half + 200 || fabsf(dy) > c->half + 200)
+		float dx = obj->pos.x - c->x, dy = obj->pos.y - c->y, along, across;
+		if (fabsf(dx) > c->half || fabsf(dy) > c->half)
 			continue;
-		if (obj->onBridge == 2)
-			return 0;	/* fell: stays below while in the crossing */
-		if (fabsf(across) <= sHalfWidth && fabsf(along) <= c->deckHalf) {
-			if (!obj->onBridge && fabsf(along) > c->deckHalf - 40)
-				obj->onBridge = Route_Level(obj->pos, obj->dir);	/* drove onto it */
-			else if (!obj->onBridge && Route_Level(obj->pos, obj->dir) &&
-				Route_BackCollision(obj->pos, 0) == 0 && fabsf(across) > sHalfWidth - 20)
-				obj->onBridge = 0;	/* beside it below: stays below */
+		if (!obj->onBridge) {
+			obj->onBridge = Route_Level(obj->pos, obj->dir) ? 1 : 2;
 			return 0;
 		}
-		if (obj->onBridge == 1 && fabsf(along) <= c->deckHalf - 10 && fabsf(across) > sHalfWidth + 6 &&
-			!obj->jumpHeight) {
-			obj->onBridge = 2;
+		if (obj->onBridge != 1 || obj->jumpHeight)
+			return 0;
+		along = dx * c->bridgeX + dy * c->bridgeY;
+		across = dx * c->bridgeY - dy * c->bridgeX;
+		if (fabsf(along) <= c->deckHalf - 10 && fabsf(across) > sHalfWidth + 6) {
+			obj->onBridge = 3;
 			return 1;
 		}
-		if (fabsf(along) > c->deckHalf && obj->onBridge == 1)
-			obj->onBridge = 0;	/* off the bridge's end: on the road again */
 		return 0;
 	}
 	obj->onBridge = 0;
+	return 0;
+}
+
+int Route_FellOffBridge(void *object)
+{
+	tObject *obj = (tObject *)object;
+	Route_UpdateLevel(object);
+	if (obj && obj->onBridge == 3) {
+		obj->onBridge = 2;
+		return 1;
+	}
+	return 0;
+}
+
+/* A jump ends: on the bridge's deck it is on the bridge, elsewhere in the
+   crossing on the road below. */
+void Route_Landed(void *object)
+{
+	tObject *obj = (tObject *)object;
+	int i;
+	if (!gRouteActive || !obj)
+		return;
+	for (i = 0; i < sCrossingCount; ++i) {
+		const tCrossing *c = &sCrossings[i];
+		float dx = obj->pos.x - c->x, dy = obj->pos.y - c->y;
+		float along = dx * c->bridgeX + dy * c->bridgeY;
+		float across = dx * c->bridgeY - dy * c->bridgeX;
+		if (fabsf(dx) > c->half || fabsf(dy) > c->half)
+			continue;
+		obj->onBridge = fabsf(along) <= c->deckHalf && fabsf(across) <= sHalfWidth ? 1 : 2;
+		return;
+	}
+}
+
+/* Below a bridge the road is walled in: a car down there cannot leave its
+   road under the deck (and so not get up to the bridge's road). Pushes it
+   back and bounces it; 1 if it hit the wall. */
+int Route_WallBelow(void *object)
+{
+	tObject *obj = (tObject *)object;
+	int i;
+	if (!gRouteActive || !obj || obj->onBridge != 2 || obj->jumpHeight)
+		return 0;
+	for (i = 0; i < sCrossingCount; ++i) {
+		const tCrossing *c = &sCrossings[i];
+		float dx = obj->pos.x - c->x, dy = obj->pos.y - c->y;
+		float along = dx * c->bridgeX + dy * c->bridgeY;
+		float across = dx * c->bridgeY - dy * c->bridgeX;
+		const SInt16 *spans;
+		int count, k, best = -1;
+		float bestDistance = 1e9f, margin = 14;
+		if (fabsf(dx) > c->half || fabsf(dy) > c->half)
+			continue;
+		if (fabsf(along) > c->deckHalf + margin || fabsf(across) > sHalfWidth + margin)
+			return 0;	/* not under the deck */
+		count = Route_RowSpans((int)(obj->pos.y / 2), 0, &spans);
+		for (k = 0; k < count; ++k) {
+			float left = spans[2 * k] + margin, right = spans[2 * k + 1] - margin, d;
+			if (obj->pos.x >= left && obj->pos.x <= right)
+				return 0;	/* on its road */
+			d = obj->pos.x < left ? left - obj->pos.x : obj->pos.x - right;
+			if (d < bestDistance) {
+				bestDistance = d;
+				best = k;
+			}
+		}
+		if (best < 0 || bestDistance > 120)
+			return 0;
+		if (obj->pos.x < spans[2 * best] + margin) {
+			obj->pos.x = spans[2 * best] + margin;
+			if (obj->velo.x < 0)
+				obj->velo.x = -obj->velo.x * 0.3f;
+		} else {
+			obj->pos.x = spans[2 * best + 1] - margin;
+			if (obj->velo.x > 0)
+				obj->velo.x = -obj->velo.x * 0.3f;
+		}
+		obj->velo = VEC2D_Scale(obj->velo, 0.85f);
+		return 1;
+	}
 	return 0;
 }

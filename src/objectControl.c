@@ -35,7 +35,10 @@ float GetCloseCar(t2DPoint pos)
 	float dist=INFINITY;
 	while(theObj!=gFirstObj)
 	{
-		if((theObj->type->flags&(kObjectBackCollFlag|kObjectBounce))||
+		/* other vehicles and animals; loose things on the road (crates,
+		   barrels) are no reason to stop: traffic knocks them aside */
+		if(((theObj->type->flags&(kObjectBackCollFlag|kObjectBounce))&&
+			(theObj->type->flags&kObjectWheelFlag||theObj->type->flags&kObjectBackCollFlag))||
 			(theObj->type->flags2&kObjectRoadKill))
 		{
 			float xdist=theObj->pos.x-pos.x;

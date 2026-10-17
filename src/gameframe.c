@@ -198,6 +198,21 @@ void ResurrectPlayer()
 		gPlayerObj->pos.y=500;
 		gPlayerObj->target=trackCount > 1 ? 1 : 0;
 	}
+	if(gRouteActive)
+	{
+		/* free-form road: back on the road where the wreck was, on the own
+		   lane, facing the way the road goes (south or west as well) */
+		float s=Route_Nearest(oldPlayer->pos,oldPlayer->routeS>0?oldPlayer->routeS:-1),dir;
+		if(s<500)
+			s=500;
+		if(s>Route_FinishS()-100)
+			s=Route_FinishS()-100;
+		Route_Point(s,Route_HalfWidth()*0.45f,&gPlayerObj->pos,&dir);
+		gPlayerObj->dir=dir;
+		gPlayerObj->routeS=s;
+		gPlayerObj->onBridge=0;
+		gPlayerObj->target=Route_TrackTarget(gTrackUp,gPlayerObj->pos);
+	}
 	gPlayerObj->velo=P2D(0,0);
 	gPlayerObj->rotVelo=0;
 	gPlayerObj->damage=0;
@@ -466,6 +481,7 @@ void PlayerHandling()
 			gCurPlayer->spikeObj=NewObject(gPlayerObj,207);
 		if(gCurPlayer->spikeObj){
 			gCurPlayer->spikeObj->pos=gPlayerObj->pos;
+			gCurPlayer->spikeObj->onBridge=gPlayerObj->onBridge;	/* the car's level */
 			gCurPlayer->spikeObj->dir=gPlayerObj->dir;
 			gCurPlayer->spikeObj->jumpHeight=gPlayerObj->jumpHeight;
 			gCurPlayer->spikeObj->frame=gCurPlayer->spikeObj->type->frame+(int)gCurPlayer->spikeFrame%gCurPlayer->spikeObj->type->numFrames;
@@ -490,6 +506,7 @@ void PlayerHandling()
 			if(gPlayerObj->input.reverse)gCurPlayer->brakeObj->frame=394;
 			if(!gPlayerObj->input.brake)gCurPlayer->brakeObj->frame=395;
 			gCurPlayer->brakeObj->pos=gPlayerObj->pos;
+			gCurPlayer->brakeObj->onBridge=gPlayerObj->onBridge;	/* not seen through a bridge */
 			gCurPlayer->brakeObj->dir=gPlayerObj->dir;
 			gCurPlayer->brakeObj->jumpHeight=gPlayerObj->jumpHeight;
 		}

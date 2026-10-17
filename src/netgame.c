@@ -2266,6 +2266,8 @@ static tObject *NewDriverExtra(tObject *car, int typeRes)
 	if (extra) {
 		extra->netLocal = 1;
 		extra->pos = car->pos;
+		Route_ObjectLevel(car);	/* (brings the car's level up to date) */
+		extra->onBridge = car->onBridge;
 		extra->dir = car->dir;
 		extra->jumpHeight = car->jumpHeight;
 	}

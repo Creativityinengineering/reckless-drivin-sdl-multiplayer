@@ -66,6 +66,8 @@ void Route_TrackObject(void *object);	/* updates its routeS */
 int Route_TrackTarget(const void *track, t2DPoint pos);
 int Route_TargetPassed(const void *track, void *object);
 float Route_BridgeS(int index);
-int Route_FellOffBridge(void *object);	/* thrown off a bridge's side: falls */	/* where the i-th bridge starts, -1: none */
+int Route_FellOffBridge(void *object);
+void Route_Landed(void *object);	/* a jump ended: bridge or below */
+int Route_WallBelow(void *object);	/* below a bridge: walls beside the road */	/* thrown off a bridge's side: falls */	/* where the i-th bridge starts, -1: none */
 
 #endif

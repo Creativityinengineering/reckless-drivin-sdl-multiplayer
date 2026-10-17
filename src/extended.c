@@ -120,8 +120,8 @@ static void AddPackages(float gap)
 			tObject *package=NewObject(gFirstObj,packageType);
 			if(package)
 			{
-				Route_Point(y,RanFl(-Route_HalfWidth()+20,Route_HalfWidth()-20),&package->pos,NULL);
-				package->dir=0;
+				/* along the road (also tells bridge from road below) */
+				Route_Point(y,RanFl(-Route_HalfWidth()+20,Route_HalfWidth()-20),&package->pos,&package->dir);
 			}
 		}
 		return;

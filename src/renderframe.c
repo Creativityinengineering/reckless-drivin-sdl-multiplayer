@@ -1167,7 +1167,7 @@ void DrawSpritesZoomed(float xDrawStart,float yDrawStart,float zoom)
 	theObj=gFirstVisObj;
 	while(theObj!=gLastVisObj)
 	{
-		if(theObj->frame&&theObj->jumpHeight&&(gRouteDrawPass<0||Route_ObjectLevel(theObj)==gRouteDrawPass))
+		if(theObj->frame&&theObj->jumpHeight&&gRouteDrawPass!=0)	/* in the air: above the bridges */
 		{
 			float x=(theObj->pos.x-xDrawStart)*invZoom;
 			float y=(yDrawStart-theObj->pos.y)*invZoom;
@@ -1282,6 +1282,17 @@ static void DrawBikeLights(float xDrawStart,float yDrawStart,float zoom)
 			continue;
 		if(gPlayers[slot].deathDelay||!gPlayers[slot].lives||!(lights=Network_DriverLights(slot)))
 			continue;
+		if(gRouteActive&&!Route_ObjectLevel(car)&&!car->jumpHeight)
+		{
+			/* below a bridge: hidden by its deck */
+			const SInt16 *deck;
+			int pieces=Route_RowSpans((int)(car->pos.y/2),1,&deck),k,under=0;
+			for(k=0;k<pieces;k++)
+				if(car->pos.x>=deck[2*k]&&car->pos.x<=deck[2*k+1])
+					under=1;
+			if(under)
+				continue;
+		}
 		back=(*car->type).length*kScale*0.5f*(1+car->jumpHeight*0.18f);
 		x=(car->pos.x-sin(car->dir)*back-xDrawStart)/zoom;
 		y=(yDrawStart-(car->pos.y-cos(car->dir)*back))/zoom;
