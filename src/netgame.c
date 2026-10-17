@@ -24,6 +24,8 @@
 #include "input.h"
 #include "platform.h"
 #include "preferences.h"
+#include "levelgen.h"
+#include "route.h"
 #include "sprites.h"
 #include "objects.h"
 #include "vec2d.h"
@@ -47,7 +49,7 @@ typedef socklen_t NetworkSockLen;
 #endif
 
 #define kNetworkMagic 0x52444d50u
-#define kNetworkVersion 18
+#define kNetworkVersion 20
 #define kNetworkIntervalMS 50
 #define kNetworkTimeoutMS 10000
 
@@ -150,6 +152,8 @@ typedef struct {
 	SInt8 theme;	/* this level's random theme, -1 = none */
 	UInt8 themeMode;	/* host's theme setting, shown in the client lobby */
 	UInt8 crateWeights[kCrateKindCount];
+	UInt8 genOn;	/* host's level generator: the clients build the same levels */
+	UInt32 genSeed, genPacked;
 	float raceTime;	/* host's race clock, negative during the countdown */
 	tNetworkPlayer players[kNetworkMaxPlayers];
 } tNetworkPacket;
@@ -170,6 +174,13 @@ static tObject *sLocalPlayer2;
 static int sIsHost;
 static int sLocalTwoPlayer;
 static int sLocalPlayerCount = 2;
+/* How far along the level a driver is: its height, or on a free-form
+   road (route.c) its distance along the road. */
+static float Progress(const tObject *object)
+{
+	return gRouteActive ? object->routeS : object->pos.y;
+}
+
 static int sLobbyPlayerLimit = kNetworkMaxPlayers;
 static int sLocalSlot = -1;
 static int sStarted;
@@ -586,6 +597,38 @@ static void ReadLocalPlayer(void)
 	CopyLocalName(state->name, sLocalSlot);
 }
 
+static void FillLevelGen(tNetworkPacket *packet)
+{
+	packet->genOn = (UInt8)(gLevelGenOn != 0);
+	packet->genSeed = gLevelGen.seed;
+	packet->genPacked = LevelGen_Pack(&gLevelGen);
+}
+
+static UInt8 sHostGenOn;	/* LAN client: the host's level generator */
+static UInt32 sHostGenSeed, sHostGenPacked;
+
+static void ReadLevelGen(const tNetworkPacket *packet)
+{
+	sHostGenOn = packet->genOn;
+	sHostGenSeed = packet->genSeed;
+	sHostGenPacked = packet->genPacked;
+}
+
+/* Generated levels: the multiplayer menu's generator, or the host's. */
+int Network_GetLevelGen(tLevelGen *gen)
+{
+	if (Network_IsClient()) {
+		if (!sHostGenOn)
+			return 0;
+		LevelGen_Unpack(sHostGenPacked, sHostGenSeed, gen);
+		return 1;
+	}
+	if (!gLevelGenOn || !Network_UsesCrateSettings())
+		return 0;
+	*gen = gLevelGen;
+	return 1;
+}
+
 static void SendHostState(void)
 {
 	tNetworkPacket packet;
@@ -605,6 +648,7 @@ static void SendHostState(void)
 		packet.themeMode = (UInt8)Network_GetLocalThemeMode();
 	}
 	packet.packageAmount = (UInt8)Network_GetLocalPackageAmount();
+	FillLevelGen(&packet);
 	packet.raceHold = sRaceHolding;
 	for (slot = 0; slot < kNetworkMaxPlayers; ++slot) {
 		packet.players[slot] = sPlayers[slot];
@@ -1176,7 +1220,7 @@ int Network_UpdateRaceProgress(void)
 		if (gPlayers[slot].lives <= 0 && gPlayers[slot].deathDelay <= 0)
 			sPlayers[slot].eliminated = 1;
 		if (object && !sPlayers[slot].finished && !sPlayers[slot].eliminated &&
-			object->pos.y > gLevelData->levelEnd)
+			(gRouteActive ? object->routeS > Route_FinishS() : object->pos.y > gLevelData->levelEnd))
 			sPlayers[slot].finished = 1;
 		if (!sPlayers[slot].finished && !sPlayers[slot].eliminated)
 			return 0;
@@ -1583,7 +1627,10 @@ tObject *Network_ClearRoadDriver(const tObject *car)
 		if (!driver || gPlayers[slot].dodgeTime <= 0)
 			continue;
 		dy = fabsf(driver->pos.y - car->pos.y);
-		if (dy < bestDistance && fabsf(driver->pos.x - car->pos.x) < 90) {
+		if (gRouteActive)	/* free-form road: the road can run across */
+			dy = sqrtf((driver->pos.x - car->pos.x) * (driver->pos.x - car->pos.x) +
+				(driver->pos.y - car->pos.y) * (driver->pos.y - car->pos.y));
+		if (dy < bestDistance && (gRouteActive || fabsf(driver->pos.x - car->pos.x) < 90)) {
 			bestDistance = dy;
 			best = driver;
 		}
@@ -1701,9 +1748,9 @@ static void UpdateWar(void)
 		object->warTargetId = enemy->netId;
 		object->warUntil = until;
 		object->control = kObjectCopControl;
-		for (object->target = 0;
+		{for (object->target = 0;
 			object->target < (int)gTrackUp->num - 1 && gTrackUp->track[object->target].y < object->pos.y;
-			object->target++);
+			object->target++); if(gRouteActive)object->target=Route_TrackTarget(gTrackUp,object->pos);}
 	}
 }
 
@@ -1722,8 +1769,10 @@ static void UpdateWildlife(void)
 			(slot == 0 ? gPlayerObj : NULL);
 		if (!driver || Extended_CountAnimalsNear(driver) >= kWildlifeMaxNear)
 			continue;
-		Extended_SpawnAnimal(driver->pos.y + 500 + RanFl(0, 450));
-		Extended_SpawnAnimal(driver->pos.y + 500 + RanFl(0, 450));
+		/* (on a free-form road: how far along it) */
+		float ahead = gRouteActive ? driver->routeS : driver->pos.y;
+		Extended_SpawnAnimal(ahead + 500 + RanFl(0, 450));
+		Extended_SpawnAnimal(ahead + 500 + RanFl(0, 450));
 	}
 }
 
@@ -1760,9 +1809,9 @@ static void UpdateZombies(void)
 			continue;
 		object->chaseTarget = victim;
 		object->control = kObjectCopControl;
-		for (object->target = 0;
+		{for (object->target = 0;
 			object->target < (int)gTrackUp->num - 1 && gTrackUp->track[object->target].y < object->pos.y;
-			object->target++);
+			object->target++); if(gRouteActive)object->target=Route_TrackTarget(gTrackUp,object->pos);}
 	}
 }
 
@@ -1843,7 +1892,7 @@ int Network_GetDriverPlace(const tObject *object)
 				gPlayers[other].score > gPlayers[slot].score;
 		else
 			ahead = sPlayers[other].finished ||
-				(IsRacing(other) && gPlayers[other].obj->pos.y > object->pos.y);
+				(IsRacing(other) && Progress(gPlayers[other].obj) > Progress(object));
 		if (ahead)
 			place++;
 	}
@@ -1904,7 +1953,7 @@ static int GetLeaderSlot(void)
 	int slot, leader = -1;
 	for (slot = 0; slot < kNetworkMaxPlayers; ++slot)
 		if (IsRacing(slot) && (leader < 0 ||
-			gPlayers[slot].obj->pos.y > gPlayers[leader].obj->pos.y))
+			Progress(gPlayers[slot].obj) > Progress(gPlayers[leader].obj)))
 			leader = slot;
 	return leader;
 }
@@ -1915,7 +1964,7 @@ int Network_IsTrailingDriver(const tObject *object)
 	int leader = GetLeaderSlot();
 	if (!Network_IsActive() || leader < 0 || !object)
 		return 0;
-	return gPlayers[leader].obj->pos.y - object->pos.y > 400;
+	return Progress(gPlayers[leader].obj) - Progress(object) > 400;
 }
 
 tObject *Network_GetSpectateTarget(const tObject *owner)
@@ -2849,6 +2898,15 @@ static void GetCarriageway(float x, float y, float *left, float *right)
 {
 	int index = (int)(y / 2);
 	tRoad road;
+	if (gRouteActive) {	/* free-form road: the piece of road at x */
+		if (!Route_SpanAt(x, y, left, right))
+			*left = *right = x;
+		else {
+			*left += 16;
+			*right -= 16;
+		}
+		return;
+	}
 	if (index < 0)
 		index = 0;
 	if (index >= (int)*gRoadLenght)
@@ -2871,10 +2929,14 @@ static void GetCarriageway(float x, float y, float *left, float *right)
 static void SetDriverTarget(tObject *driver)
 {
 	driver->control = kObjectDriveUp;
-	for (driver->target = 0;
+	if (gRouteActive) {
+		driver->target = Route_TrackTarget(gTrackUp, driver->pos);
+		return;
+	}
+	{for (driver->target = 0;
 		driver->target < (int)gTrackUp->num - 1 &&
 		gTrackUp->track[driver->target].y < driver->pos.y;
-		driver->target++);
+		driver->target++); if(gRouteActive)driver->target=Route_TrackTarget(gTrackUp,driver->pos);}
 }
 
 /* Start grid: two cars side by side, rows behind each other; each slot has
@@ -2911,6 +2973,28 @@ void Network_PlaceDriverApart(tObject *driver)
 	int row, side;
 	if (!Network_IsActive() || !driver)
 		return;
+	if (gRouteActive) {
+		/* free-form road: beside or behind along the road */
+		float s = Route_Nearest(driver->pos, driver->routeS > 0 ? driver->routeS : -1);
+		for (row = 0; row < 6; ++row)
+			for (side = 0; side < 5; ++side) {
+				t2DPoint pos;
+				float dir;
+				Route_Point(s - row * kDriverGap, kSideOffsets[side] + Route_HalfWidth() * 0.4f, &pos, &dir);
+				if (s - row * kDriverGap < 100 || Route_BackCollision(pos, 0))
+					continue;
+				if (DriverSpotIsFree(driver, pos)) {
+					if (row || side) {
+						driver->pos = pos;
+						driver->dir = dir;
+						driver->routeS = s - row * kDriverGap;
+						SetDriverTarget(driver);
+					}
+					return;
+				}
+			}
+		return;
+	}
 	for (row = 0; row < 6; ++row)
 		for (side = 0; side < 5; ++side) {
 			t2DPoint pos = P2D(driver->pos.x + kSideOffsets[side],
@@ -3137,6 +3221,7 @@ static void ProcessHostPacket(const tNetworkPacket *packet, const struct sockadd
 			memcpy(sPlayers[slot].name, packet->players[0].name,
 				sizeof(sPlayers[slot].name));
 		InitializePacket(&response, kPacketWelcome);
+		FillLevelGen(&response);
 		response.slot = (UInt8)slot;
 		response.started = (UInt8)sStartedByHost;
 		response.raceId = sRaceId;
@@ -3182,6 +3267,7 @@ static void ProcessClientPacket(const tNetworkPacket *packet, const struct socka
 	if (packet->type == kPacketWelcome) {
 		if (packet->slot > 0 && packet->slot < kNetworkMaxPlayers) {
 			sLocalSlot = packet->slot;
+			ReadLevelGen(packet);
 			sPlayers[sLocalSlot].vehicle = Network_GetLocalVehicle();
 			sRaceId = packet->raceId;
 			sStarted = packet->started != 0;
@@ -3197,6 +3283,7 @@ static void ProcessClientPacket(const tNetworkPacket *packet, const struct socka
 	levelChanged = gGameOn && packet->level < 10 && packet->level != gLevelID;
 	sHostMode = packet->duel < kGameModeCount ? packet->duel : kGameModeCoop;
 	memcpy(sHostWeights, packet->crateWeights, sizeof(sHostWeights));
+	ReadLevelGen(packet);
 	sHostTheme = packet->theme;
 	sHostThemeMode = packet->themeMode < kThemeFixed + kCrateThemeCount ?
 		packet->themeMode : kThemeOff;
@@ -3477,6 +3564,8 @@ void Network_SyncObjects(void)
 		/* Dents made here by collisions are replaced by the reported ones. */
 		ApplyLook(object, player->frame, player->damageFlags, player->damage, player->dents);
 		object->jumpHeight += (player->jumpHeight - object->jumpHeight) * 0.5f;
+		if (gRouteActive)	/* free-form road: how far along it, for places */
+			Route_TrackObject(object);
 		if (player->jumpHeight == 0)
 			object->jumpHeight = 0;
 		RemoteDriverEffects(slot, object);

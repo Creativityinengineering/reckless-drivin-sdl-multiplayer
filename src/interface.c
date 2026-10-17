@@ -11,6 +11,7 @@
 #include "register.h"
 #include "platform.h"
 #include "netgame.h"
+#include "levelgen.h"
 #include "textrender.h"
 #include "hqassets.h"
 #include <stdio.h>
@@ -480,15 +481,21 @@ static void DrawMultiplayerOverlay(const char *title, const char *subtitle,
 		DrawMenuButton(fb, stride, kCratesButtonX, kMenuButtonY, kMenuButtonW, kMenuButtonH,
 			COL_YELLOW, 0x2520, "CRATES", info1, info2, COL_YELLOW);
 	}
-	snprintf(info1, sizeof(info1), "START IN %d", Prefs_GetStartLevel() + 1);
+	if (gLevelGenOn) {
+		snprintf(info1, sizeof(info1), "GENERATED");
+		LevelGen_Encode(&gLevelGen, info2);
+	} else {
+		snprintf(info1, sizeof(info1), "START IN %d", Prefs_GetStartLevel() + 1);
+		snprintf(info2, sizeof(info2), "ORIGINAL LEVELS");
+	}
 	DrawMenuButton(fb, stride, kLevelButtonX, kMenuButtonY, kMenuButtonW, kMenuButtonH,
-		0x7C1F, 0x300C, "LEVEL", info1, "<  CLICK  >", 0x7C1F);
+		0x7C1F, 0x300C, "LEVEL", info1, info2, 0x7C1F);
 	snprintf(info1, sizeof(info1), "P1 GAS: %.8s", gasKey && gasKey[0] ? gasKey : "UNBOUND");
 	DrawMenuButton(fb, stride, kControlsButtonX, kMenuButtonY, kMenuButtonW, kMenuButtonH,
 		COL_CYAN, 0x00E9, "KEYS", info1, "ALL PLAYERS", COL_CYAN);
 
 	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 364,
-		"M MODE  K CRATES  +/- LEVEL  P KEYS  ENTER START", 0x4210, 1);
+		"M MODE  K CRATES  G LEVEL  P KEYS  ENTER START", 0x4210, 1);
 	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 384,
 		"ESC  BACK", 0x4210, 1);
 	Platform_Blit2Screen();
@@ -700,6 +707,413 @@ static void StepStartLevel(int step)
 	WritePrefs(0);
 }
 
+/* ---- LEVEL (G in the multiplayer menu): the original levels, or the level
+   generator: a seed and track settings, written as a level code that gives
+   the same level again on any computer. ---- */
+#define kLevelRowY 66
+#define kLevelRowH 18
+#define kPreviewX 92
+#define kPreviewY 340
+#define kPreviewW 456
+#define kPreviewH 58
+enum {
+	kLevelRowSource, kLevelRowFirstSetting,	/* landscape, then 8 settings */
+	kLevelRowSeed = kLevelRowFirstSetting + 10, kLevelRowCode, kLevelRowSave,
+	kLevelRowSaved, kLevelRowCount
+};
+static const char *const kSettingLabels[9] = {
+	"LENGTH", "CURVES", "ROAD", "TRAFFIC", "TRAFFIC SPEED", "POLICE", "JUMPS", "TIME LIMIT",
+	"CROSSINGS"
+};
+
+static UInt8 *GenSetting(tLevelGen *gen, int setting)
+{
+	UInt8 *values[9] = {&gen->length, &gen->curves, &gen->width, &gen->traffic,
+		&gen->speed, &gen->cops, &gen->jumps, &gen->time, &gen->crossings};
+	return values[setting];
+}
+
+/* The whole track as a map: start on the left, finish on the right, the
+   road as seen from above (turned sideways), medians, ramps. */
+static void DrawTrackPreview(tPixel *fb, int stride)
+{
+	static UInt32 cachedSeed, cachedPacked;
+	static int cached, rampCount, bridgeCount;
+	static float left[kPreviewW], right[kPreviewW], ramps[32], bridges[16];
+	static UInt8 divided[kPreviewW];
+	static const UInt16 kGround[kGenLandscapes] = {
+		0x0D04, 0x0D04, 0x2D06, 0x0D04, 0x0D04, 0x0D04, 0x5EF7, 0x0442, 0x2D06, 0x5AE0
+	};
+	float low = 1e9f, high = -1e9f, scale;
+	int column, i, water = gLevelGen.landscape == 4;
+	if (gLevelGen.crossings && !water) {
+		/* a free-form road: its real shape, loops and bridges, turned
+		   sideways (start left, finish right) */
+		static float xs[900], ys[900];
+		static UInt8 bridge[900];
+		static UInt32 routeSeed, routePacked;
+		static int routeCount, routeKnown;
+		float minX = 1e9f, maxX = -1e9f, minY = 1e9f, maxY = -1e9f, midX;
+		int pass;
+		if (!routeKnown || routeSeed != gLevelGen.seed || routePacked != LevelGen_Pack(&gLevelGen)) {
+			routeCount = LevelGen_PreviewRoute(&gLevelGen, xs, ys, bridge, 900);
+			routeKnown = 1;
+			routeSeed = gLevelGen.seed;
+			routePacked = LevelGen_Pack(&gLevelGen);
+		}
+		TR_FillRect(fb, stride, kPreviewX - 2, kPreviewY - 2, kPreviewW + 4, kPreviewH + 4, COL_DKGRAY);
+		TR_FillRect(fb, stride, kPreviewX, kPreviewY, kPreviewW, kPreviewH, kGround[gLevelGen.landscape]);
+		for (i = 0; i < routeCount; ++i) {
+			if (xs[i] < minX) minX = xs[i];
+			if (xs[i] > maxX) maxX = xs[i];
+			if (ys[i] < minY) minY = ys[i];
+			if (ys[i] > maxY) maxY = ys[i];
+		}
+		scale = (kPreviewW - 8) / (maxY - minY > 1 ? maxY - minY : 1);
+		if ((maxX - minX) * scale > kPreviewH - 8)
+			scale = (kPreviewH - 8) / (maxX - minX);
+		midX = (minX + maxX) * 0.5f;
+		for (pass = 0; pass < 2; ++pass)	/* the road, then the bridges on top */
+			for (i = 0; i < routeCount; ++i) {
+				int px = kPreviewX + 4 + (int)((ys[i] - minY) * scale);
+				int py = kPreviewY + kPreviewH / 2 - (int)((xs[i] - midX) * scale);
+				if (pass == 0)
+					TR_FillRect(fb, stride, px - 1, py - 1, 3, 3, 0x4A52);
+				else if (bridge[i])
+					TR_FillRect(fb, stride, px - 2, py - 2, 5, 5, 0x6B5A);
+			}
+		TR_FillRect(fb, stride, kPreviewX, kPreviewY, 3, kPreviewH, COL_GREEN);
+		TR_FillRect(fb, stride, kPreviewX + kPreviewW - 3, kPreviewY, 3, kPreviewH, COL_RED);
+		TR_DrawString(fb, stride, kPreviewX + 6, kPreviewY + 3, "START", COL_WHITE, 1);
+		TR_DrawStringRight(fb, stride, kPreviewX + kPreviewW - 6, kPreviewY + 3, "FINISH", COL_WHITE, 1);
+		return;
+	}
+	if (!cached || cachedSeed != gLevelGen.seed || cachedPacked != LevelGen_Pack(&gLevelGen)) {
+		if (!LevelGen_Preview(&gLevelGen, kPreviewW, left, right, divided, ramps, 32, &rampCount,
+			bridges, &bridgeCount))
+			return;
+		cached = 1;
+		cachedSeed = gLevelGen.seed;
+		cachedPacked = LevelGen_Pack(&gLevelGen);
+	}
+	TR_FillRect(fb, stride, kPreviewX - 2, kPreviewY - 2, kPreviewW + 4, kPreviewH + 4, COL_DKGRAY);
+	TR_FillRect(fb, stride, kPreviewX, kPreviewY, kPreviewW, kPreviewH,
+		water ? 0x1CE0 : kGround[gLevelGen.landscape]);
+	for (column = 0; column < kPreviewW; ++column) {
+		if (left[column] < low) low = left[column];
+		if (right[column] > high) high = right[column];
+	}
+	{
+		float lengthScale = kPreviewW / (float)(gLevelGen.length == 0 ? 20000 :
+			gLevelGen.length == 1 ? 32000 : gLevelGen.length == 2 ? 44000 : 58000);
+		float sideScale = (kPreviewH - 6) / (high - low > 1 ? high - low : 1);
+		/* bends drawn higher than they are (up to 8x), so they show */
+		scale = sideScale < lengthScale * 8 ? sideScale : lengthScale * 8;
+	}
+	for (column = 0; column < kPreviewW; ++column) {
+		float mid = (low + high) * 0.5f;
+		/* right of the road is up on the map: the way the cars look */
+		int top = kPreviewY + kPreviewH / 2 - (int)((right[column] - mid) * scale + 0.5f);
+		int bottom = kPreviewY + kPreviewH / 2 - (int)((left[column] - mid) * scale - 0.5f);
+		if (bottom - top < 3) {	/* at least a visible line */
+			int middle = (top + bottom) / 2;
+			top = middle - 1;
+			bottom = middle + 2;
+		}
+		TR_FillRect(fb, stride, kPreviewX + column, top, 1, bottom - top,
+			water ? 0x2D7F : divided[column] ? 0x5294 : 0x4A52);
+		if (divided[column] && bottom - top > 3)
+			TR_FillRect(fb, stride, kPreviewX + column, (top + bottom) / 2, 1, 1, 0x0D04);
+	}
+	for (i = 0; i < rampCount; ++i) {
+		int column2 = (int)(ramps[i] * (kPreviewW - 1));
+		float mid = (low + high) * 0.5f;
+		int y = kPreviewY + kPreviewH / 2 - (int)(((left[column2] + right[column2]) * 0.5f - mid) * scale);
+		TR_FillRect(fb, stride, kPreviewX + column2 - 1, y - 1, 3, 3, COL_YELLOW);
+	}
+	/* overpasses: a road crossing the track */
+	for (i = 0; i < bridgeCount; ++i)
+		TR_FillRect(fb, stride, kPreviewX + (int)(bridges[i] * (kPreviewW - 1)) - 1, kPreviewY + 2,
+			3, kPreviewH - 4, 0x6B5A);
+	TR_FillRect(fb, stride, kPreviewX, kPreviewY, 3, kPreviewH, COL_GREEN);
+	TR_FillRect(fb, stride, kPreviewX + kPreviewW - 3, kPreviewY, 3, kPreviewH, COL_RED);
+	TR_DrawString(fb, stride, kPreviewX + 6, kPreviewY + 3, "START", COL_WHITE, 1);
+	TR_DrawStringRight(fb, stride, kPreviewX + kPreviewW - 6, kPreviewY + 3, "FINISH", COL_WHITE, 1);
+}
+
+static void DrawLevelSettings(int selected, const char *message, UInt16 messageColor)
+{
+	int rowBytes, stride, row, rows = gLevelGenOn ? kLevelRowCount : kLevelRowFirstSetting + 1;
+	char line[80], code[kLevelCodeSize];
+	tPixel *fb = Platform_GetFramebuffer(&rowBytes);
+	if (!fb)
+		return;
+	stride = rowBytes / 4;
+	TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+	TR_FillRect(fb, stride, 72, 26, 496, 428, COL_DKGRAY);
+	TR_FillRect(fb, stride, 76, 30, 488, 420, COL_BAR_BG);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 38, "LEVEL", 0x7C1F, 2);
+	LevelGen_Encode(&gLevelGen, code);
+	for (row = 0; row < rows; ++row) {
+		int y = kLevelRowY + row * kLevelRowH;
+		if (row == kLevelRowSource)
+			snprintf(line, sizeof(line), "< LEVELS: %s >", gLevelGenOn ? "GENERATED" : "ORIGINAL");
+		else if (!gLevelGenOn)
+			snprintf(line, sizeof(line), "< START IN LEVEL %d: %s >", Prefs_GetStartLevel() + 1,
+				LevelGen_LandscapeName(Prefs_GetStartLevel()));
+		else if (row == kLevelRowFirstSetting)
+			snprintf(line, sizeof(line), "< LANDSCAPE: %s >", LevelGen_LandscapeName(gLevelGen.landscape));
+		else if (row < kLevelRowSeed) {
+			int setting = row - kLevelRowFirstSetting - 1;
+			snprintf(line, sizeof(line), "< %s: %s >", kSettingLabels[setting],
+				LevelGen_ChoiceName(setting, *GenSetting(&gLevelGen, setting)));
+		} else if (row == kLevelRowSeed)
+			snprintf(line, sizeof(line), "SEED: %u   (DIGITS, R: RANDOM)", (unsigned)gLevelGen.seed);
+		else if (row == kLevelRowCode)
+			snprintf(line, sizeof(line), "LEVEL CODE: %s   (ENTER: TYPE ONE)", code);
+		else if (row == kLevelRowSave)
+			snprintf(line, sizeof(line), "SAVE THIS LEVEL");
+		else
+			snprintf(line, sizeof(line), "SAVED LEVELS (%d)", LevelGen_SavedCount());
+		DrawCrateRow(fb, stride, y, row == selected, line);
+	}
+	if (gLevelGenOn)
+		DrawTrackPreview(fb, stride);
+	if (message)
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 400, message, messageColor, 1);
+	else if (gLevelGenOn)
+		TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 400,
+			"WRITE THE CODE DOWN OR SAVE IT: IT GIVES THIS LEVEL AGAIN", COL_GRAY, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 414,
+		"UP/DOWN SELECT  |  LEFT/RIGHT CHANGE  |  ENTER", COL_CYAN, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 427,
+		gLevelGenOn ? "A LAN GAME USES THE HOST'S LEVELS" : "THE ORIGINAL TEN LEVELS", COL_CYAN, 1);
+	TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 440, "ESC  BACK (SAVED)", COL_GRAY, 1);
+	Platform_Blit2Screen();
+}
+
+/* Typing a level code; returns 1 with gLevelGen set from a valid one. */
+static int EnterLevelCode(void)
+{
+	char text[20] = "";
+	const char *error = NULL;
+	Platform_StartTextEntry();
+	for (;;) {
+		int rowBytes, stride;
+		char typed[20], shown[40];
+		size_t length = strlen(text);
+		tPixel *fb;
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			break;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			break;
+		if (Platform_TakeTypedText(typed, sizeof(typed))) {
+			const char *c;
+			for (c = typed; *c && length + 1 < sizeof(text) - 4; ++c)
+				if ((*c >= '0' && *c <= '9') || (*c >= 'A' && *c <= 'Z') ||
+					(*c >= 'a' && *c <= 'z') || *c == '-') {
+					text[length++] = (char)(*c >= 'a' && *c <= 'z' ? *c - 'a' + 'A' : *c);
+					text[length] = '\0';
+				}
+			error = NULL;
+		}
+		if (Platform_WasKeyTyped(SDL_SCANCODE_BACKSPACE) && length)
+			text[--length] = '\0';
+		if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER)) {
+			tLevelGen gen;
+			if (LevelGen_Decode(text, &gen)) {
+				gLevelGen = gen;
+				Platform_StopTextEntry();
+				return 1;
+			}
+			error = "NOT A LEVEL CODE - CHECK THE LETTERS";
+		}
+		fb = Platform_GetFramebuffer(&rowBytes);
+		if (fb) {
+			stride = rowBytes / 4;
+			TR_FillRect(fb, stride, 112, 160, 416, 150, COL_DKGRAY);
+			TR_FillRect(fb, stride, 116, 164, 408, 142, COL_BAR_BG);
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 178, "TYPE A LEVEL CODE", 0x7C1F, 2);
+			snprintf(shown, sizeof(shown), "%s%s", text, (SDL_GetTicks64() / 400) & 1 ? "_" : " ");
+			TR_FillRect(fb, stride, 150, 212, 340, 26, COL_BLACK);
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 216, shown, COL_GREEN, 2);
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 252,
+				error ? error : "LIKE K7Q2-M9XA-3ZPD", error ? COL_RED : COL_GRAY, 1);
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 280, "ENTER: OK   ESC: BACK", COL_CYAN, 1);
+			Platform_Blit2Screen();
+		}
+		SDL_Delay(16);
+	}
+	Platform_StopTextEntry();
+	return 0;
+}
+
+/* The saved levels: ENTER loads one, DELETE removes it. */
+static int ChooseSavedLevel(void)
+{
+	int selected = 0;
+	for (;;) {
+		int rowBytes, stride, count = LevelGen_SavedCount(), i, x, y;
+		tPixel *fb;
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			return 0;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			return 0;
+		if (count && Platform_WasKeyPressed(SDL_SCANCODE_UP))
+			selected = (selected + count - 1) % count;
+		if (count && Platform_WasKeyPressed(SDL_SCANCODE_DOWN))
+			selected = (selected + 1) % count;
+		if (selected >= count)
+			selected = count ? count - 1 : 0;
+		if (count && (Platform_WasKeyPressed(SDL_SCANCODE_DELETE) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_BACKSPACE)))
+			LevelGen_DeleteSaved(selected);
+		if (count && (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER)))
+			return LevelGen_GetSaved(selected, &gLevelGen);
+		if (Platform_GetMouseClick(&x, &y)) {
+			i = (y - 96) / kLevelRowH;
+			if (y >= 96 && i < count) {
+				if (i == selected)
+					return LevelGen_GetSaved(selected, &gLevelGen);
+				selected = i;
+			}
+		}
+		fb = Platform_GetFramebuffer(&rowBytes);
+		if (fb) {
+			stride = rowBytes / 4;
+			TR_FillRect(fb, stride, 0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, COL_BLACK);
+			TR_FillRect(fb, stride, 72, 46, 496, 388, COL_DKGRAY);
+			TR_FillRect(fb, stride, 76, 50, 488, 380, COL_BAR_BG);
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 62, "SAVED LEVELS", 0x7C1F, 2);
+			if (!count)
+				TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 200,
+					"NONE YET - SAVE ONE IN THE LEVEL SCREEN", COL_GRAY, 1);
+			for (i = 0; i < count; ++i) {
+				tLevelGen gen;
+				char code[kLevelCodeSize], line[80];
+				LevelGen_GetSaved(i, &gen);
+				LevelGen_Encode(&gen, code);
+				snprintf(line, sizeof(line), "%s  %s  %s", code, LevelGen_LandscapeName(gen.landscape),
+					LevelGen_ChoiceName(0, gen.length));
+				DrawCrateRow(fb, stride, 96 + i * kLevelRowH, i == selected, line);
+			}
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 400,
+				"ENTER: PLAY THIS ONE  |  DELETE: REMOVE", COL_CYAN, 1);
+			TR_DrawStringCentered(fb, stride, SCREEN_WIDTH / 2, 416, "ESC  BACK", COL_GRAY, 1);
+			Platform_Blit2Screen();
+		}
+		SDL_Delay(16);
+	}
+}
+
+static void ChangeLevelRow(int row, int step)
+{
+	if (row == kLevelRowSource)
+		gLevelGenOn = !gLevelGenOn;
+	else if (!gLevelGenOn)
+		Prefs_SetStartLevel((Prefs_GetStartLevel() + 10 + step) % 10);
+	else if (row == kLevelRowFirstSetting)
+		gLevelGen.landscape = (UInt8)((gLevelGen.landscape + kGenLandscapes + step) % kGenLandscapes);
+	else if (row < kLevelRowSeed) {
+		UInt8 *value = GenSetting(&gLevelGen, row - kLevelRowFirstSetting - 1);
+		*value = (UInt8)((*value + kGenChoices + step) % kGenChoices);
+	}
+}
+
+static void ChooseLevelSettings(void)
+{
+	int selected = 0, seedTyped = 0;
+	const char *message = NULL;
+	UInt16 messageColor = COL_GREEN;
+	for (;;) {
+		int rows = gLevelGenOn ? kLevelRowCount : kLevelRowFirstSetting + 1, x, y, digit, activate = 0;
+		Platform_PollEvents();
+		if (Platform_ShouldQuit()) {
+			gExit = true;
+			break;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_ESCAPE))
+			break;
+		if (selected >= rows)
+			selected = rows - 1;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_UP)) {
+			selected = (selected + rows - 1) % rows;
+			seedTyped = 0;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_DOWN)) {
+			selected = (selected + 1) % rows;
+			seedTyped = 0;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_LEFT))
+			ChangeLevelRow(selected, -1), message = NULL;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_RIGHT))
+			ChangeLevelRow(selected, 1), message = NULL;
+		if (Platform_WasKeyPressed(SDL_SCANCODE_RETURN) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_KP_ENTER) ||
+			Platform_WasKeyPressed(SDL_SCANCODE_SPACE))
+			activate = 1;
+		if (gLevelGenOn && Platform_WasKeyPressed(SDL_SCANCODE_R)) {
+			gLevelGen.seed = (UInt32)(SDL_GetPerformanceCounter() * 2654435761u % 1000000000u);
+			message = NULL;
+		}
+		/* digits on the seed row type a new seed */
+		if (gLevelGenOn && selected == kLevelRowSeed) {
+			for (digit = 0; digit < 10; ++digit)
+				if (Platform_WasKeyPressed(digit ? SDL_SCANCODE_1 + digit - 1 : SDL_SCANCODE_0) ||
+					Platform_WasKeyPressed(digit ? SDL_SCANCODE_KP_1 + digit - 1 : SDL_SCANCODE_KP_0)) {
+					UInt64 seed = seedTyped ? (UInt64)gLevelGen.seed * 10 + digit : (UInt64)digit;
+					if (seed <= 0xFFFFFFFFull)
+						gLevelGen.seed = (UInt32)seed;
+					seedTyped = 1;
+					message = NULL;
+				}
+			if (Platform_WasKeyTyped(SDL_SCANCODE_BACKSPACE)) {
+				gLevelGen.seed /= 10;
+				seedTyped = 1;
+			}
+		}
+		if (Platform_GetMouseClick(&x, &y)) {
+			int row = (y - kLevelRowY) / kLevelRowH;
+			if (y >= kLevelRowY && row < rows && x >= 92 && x < 548) {
+				selected = row;
+				seedTyped = 0;
+				if (row < kLevelRowSeed)
+					ChangeLevelRow(row, x < SCREEN_WIDTH / 2 ? -1 : 1);
+				else
+					activate = 1;
+				message = NULL;
+			} else if (y >= 424)
+				break;
+		}
+		if (activate) {
+			if (selected < kLevelRowSeed && selected != kLevelRowSeed)
+				ChangeLevelRow(selected, 1);
+			else if (selected == kLevelRowCode) {
+				if (EnterLevelCode())
+					message = "LEVEL CODE LOADED", messageColor = COL_GREEN;
+			} else if (selected == kLevelRowSave) {
+				LevelGen_AddSaved(&gLevelGen);
+				message = "SAVED - FIND IT UNDER SAVED LEVELS", messageColor = COL_GREEN;
+			} else if (selected == kLevelRowSaved) {
+				if (ChooseSavedLevel())
+					message = "SAVED LEVEL LOADED", messageColor = COL_GREEN;
+			}
+		}
+		DrawLevelSettings(selected, message, messageColor);
+		SDL_Delay(16);
+	}
+	WritePrefs(0);
+	LevelGen_SaveSettings();
+}
+
 /* The way of playing chosen last (local, host, join): preselected, so after
    a game Enter plays the same again. */
 static int sLastMultiplayerChoice;
@@ -744,6 +1158,11 @@ static int ChooseMultiplayerMode(void)
 			Platform_WasKeyPressed(SDL_SCANCODE_KP_MINUS) ||
 			Platform_WasKeyPressed(SDL_SCANCODE_SLASH)) {
 			StepStartLevel(-1);
+			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
+			continue;
+		}
+		if (Platform_WasKeyPressed(SDL_SCANCODE_G)) {
+			ChooseLevelSettings();
 			DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
 			continue;
 		}
@@ -797,7 +1216,7 @@ static int ChooseMultiplayerMode(void)
 				if (x >= kCratesButtonX && x < kCratesButtonX + kMenuButtonW)
 					ChooseCrates();
 				else if (x >= kLevelButtonX && x < kLevelButtonX + kMenuButtonW)
-					StepStartLevel(x < kLevelButtonX + kMenuButtonW / 2 ? -1 : 1);
+					ChooseLevelSettings();
 				else if (x >= kControlsButtonX && x < kControlsButtonX + kMenuButtonW)
 					ConfigureInput();
 				DrawMultiplayerOverlay("MULTIPLAYER", "CHOOSE HOW TO PLAY", selected);
@@ -953,6 +1372,17 @@ static void DrawLobbySettings(tPixel *fb, int stride, int y, int isClient)
 	TR_DrawString(fb, stride, 146, y + 24, line, COL_WHITE, 1);
 	snprintf(line, sizeof(line), "PACKAGES: %s", kAmounts[Network_GetPackageAmount()]);
 	TR_DrawString(fb, stride, 146, y + 36, line, COL_WHITE, 1);
+	{
+		/* generated levels: the code, so everyone can note it down */
+		tLevelGen gen;
+		char code[kLevelCodeSize];
+		if (Network_GetLevelGen(&gen)) {
+			LevelGen_Encode(&gen, code);
+			snprintf(line, sizeof(line), "LEVEL %s", code);
+		} else
+			snprintf(line, sizeof(line), "ORIGINAL LEVELS");
+		TR_DrawStringRight(fb, stride, 494, y + 36, line, COL_YELLOW, 1);
+	}
 }
 
 static void DrawLobbyDrivers(tPixel *fb, int stride, int y)
@@ -1485,7 +1915,7 @@ static void HostLanGame(int targetPlayers, int shiftHeld)
 	ready = WaitForLanPlayers(targetPlayers);
 	StopNameEdit();
 	if (ready) {
-		gStartLevel = Prefs_GetStartLevel();
+		gStartLevel = gLevelGenOn ? 0 : Prefs_GetStartLevel();	/* generated: from its first level */
 		StartGame(shiftHeld);
 		gStartLevel = 0;
 	} else {
@@ -1525,7 +1955,7 @@ static void StartMultiplayer(int shiftHeld)
 		if (playerCount > 1)
 			Network_EnableLocalPlayers(playerCount);
 		Network_SetSoloModes(1);	/* until EndGame */
-		gStartLevel = Prefs_GetStartLevel();
+		gStartLevel = gLevelGenOn ? 0 : Prefs_GetStartLevel();	/* generated: from its first level */
 		StartGame(shiftHeld);
 		gStartLevel = 0;
 		return;
@@ -1865,6 +2295,7 @@ void InitInterface(void)
 	if(!gInterfaceInited)
 	{
 		gInterfaceInited=true;
+		LevelGen_LoadSettings();
 
 		/* Load all three menu state images */
 		LoadPPicToBuffer(1000, sMenuNormal);

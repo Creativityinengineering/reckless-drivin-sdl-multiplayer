@@ -1,4 +1,5 @@
 #include "compat.h"
+#include "route.h"
 #include <math.h>
 #include <stdio.h>
 #include "objects.h"
@@ -244,6 +245,21 @@ void DamageObj(tObject *theObj,float damage,t2DPoint diff)
 		}
 		MakeDebris(theObj,damagePos,damage,maxDamage);
 	}
+}
+
+/* Free-form road: a car dropped off a bridge's side lands hard, front and
+   back, battered but driving. */
+void FallDamage(tObject *theObj)
+{
+	float maxDamage=(*theObj->type).maxDamage;
+	t2DPoint ahead=P2D(sin(theObj->dir),cos(theObj->dir));
+	if(maxDamage<=0)	/* no damage meter: the dents only */
+	{
+		theObj->damageFlags|=0;
+		return;
+	}
+	DamageObj(theObj,maxDamage*0.18f,ahead);
+	DamageObj(theObj,maxDamage*0.18f,VEC2D_Scale(ahead,-1));
 }
 
 void DoBounce(tObject *obj1,tObject *obj2,t2DPoint diff)
@@ -685,9 +701,9 @@ static void CopRammed(tObject *a,tObject *b)
 	if(cop->control!=kObjectCopControl)
 	{
 		cop->control=kObjectCopControl;
-		for(cop->target=0;
+		{for(cop->target=0;
 			cop->target<gTrackUp->num-1&&gTrackUp->track[cop->target].y<cop->pos.y;
-			cop->target++);
+			cop->target++); if(gRouteActive)cop->target=Route_TrackTarget(gTrackUp,cop->pos);}
 	}
 }
 
@@ -696,7 +712,9 @@ void HandleCollision(tObject *posObj)
 	tObject	*theObj=gFirstVisObj;
 	while(theObj!=gLastVisObj)
 	{
-		if(theObj!=posObj&&theObj!=posObj->shooter&&posObj!=theObj->shooter)
+		/* (where the road crosses itself, the bridge and below do not touch) */
+		if(theObj!=posObj&&theObj!=posObj->shooter&&posObj!=theObj->shooter&&
+			(!gRouteActive||Route_SameLevel(theObj,posObj)))
 		{
 			float xdist=theObj->pos.x-posObj->pos.x;
 			float ydist=theObj->pos.y-posObj->pos.y;

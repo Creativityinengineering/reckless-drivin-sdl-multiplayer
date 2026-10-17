@@ -200,7 +200,9 @@ void GameEndSequence();
 int LoadLevel()
 {
 	int i,sound;
-	if(gLevelID>=kEncryptedPack-kPackLevel1||gLevelResFile)
+	tLevelGen gen;
+	int generated=Network_GetLevelGen(&gen);
+	if(!generated&&(gLevelID>=kEncryptedPack-kPackLevel1||gLevelResFile))
 		if(!gRegistered)
 		{
 			ShowPicScreen(1005);
@@ -223,6 +225,19 @@ int LoadLevel()
 		gLevelID=0;
 	}
 
+	if(generated)
+	{
+		/* Level generator: road, tracks, marks and the fixed objects. */
+		if(!LevelGen_Build(&gen,gLevelID))
+		{
+			fprintf(stderr,"[gameinitexit] LoadLevel: the level generator failed\n");
+			DisposePtr((Ptr)gFirstObj);
+			gFirstObj=nil;
+			return false;
+		}
+	}
+	else
+	{
 	LoadPack(kPackLevel1+gLevelID);
 	gLevelData=(tLevelData*)GetSortedPackEntry(kPackLevel1+gLevelID,1,nil);
 	SwapLevelData(gLevelData);
@@ -241,6 +256,7 @@ int LoadLevel()
 #endif
 	gRoadData=(tRoad)((Ptr)gRoadLenght+sizeof(UInt32));
 	SwapRoadData((tRoadSeg*)gRoadData, *gRoadLenght);
+	}
 
 	for(i=0;i<9;i++)
 		if((*gLevelData).objGrps[i].resID)
@@ -289,7 +305,10 @@ int LoadLevel()
 void DisposeLevel()
 {
 	Network_ResetLevel();
-	UnloadPack(kPackLevel1+gLevelID);
+	if(LevelGen_IsLoaded())
+		LevelGen_Dispose();
+	else
+		UnloadPack(kPackLevel1+gLevelID);
 	gPlayerObj=nil;
 	while((tObject*)gFirstObj->next!=gFirstObj)
 	{

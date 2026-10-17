@@ -1,3 +1,4 @@
+#include "route.h"
 #include <math.h>
 #include "extended.h"
 #include "objectcontrol.h"
@@ -111,6 +112,20 @@ static void AddPackages(float gap)
 	}
 	if(!GetUnsortedPackEntry(kPackObTy,packageType,nil))
 		return;
+	if(gRouteActive)
+	{
+		/* free-form road: along it, anywhere across */
+		for(y=900;y<Route_FinishS()-300;y+=gap+RanFl(-60,60))
+		{
+			tObject *package=NewObject(gFirstObj,packageType);
+			if(package)
+			{
+				Route_Point(y,RanFl(-Route_HalfWidth()+20,Route_HalfWidth()-20),&package->pos,NULL);
+				package->dir=0;
+			}
+		}
+		return;
+	}
 	for(y=900;y<gLevelData->levelEnd-300;y+=gap+RanFl(-60,60))
 	{
 		tRoad road=gRoadData+(int)(y/2);
@@ -141,6 +156,24 @@ void Extended_SpawnAnimal(float y)
 	tRoad road;
 	tObject *animal;
 	int index=(int)(y/2),left=RanProb(0.5);
+	if(gRouteActive)
+	{
+		/* free-form road: y is how far along it; beside it, off any road */
+		t2DPoint pos;
+		float dir;
+		if((*gRoadInfo).water||y<300||y>Route_Length()-300)
+			return;
+		Route_Point(y,(left?-1:1)*(Route_HalfWidth()+RanFl(20,90)),&pos,&dir);
+		if(Route_BackCollision(pos,0)!=2)
+			return;
+		animal=NewObject(gFirstObj,kAnimalTypes[RanInt(0,2)]);
+		if(!animal)
+			return;
+		animal->pos=pos;
+		animal->dir=dir+(left?PI/2:-PI/2);	/* facing the road */
+		animal->control=kObjectCrossRoad;
+		return;
+	}
 	if(index<1||index>=(int)*gRoadLenght-1||(*gRoadInfo).water)
 		return;
 	road=gRoadData+index;
@@ -171,7 +204,7 @@ void Extended_AddWildlife(void)
 	float y;
 	if((*gRoadInfo).water)
 		return;
-	for(y=700;y<gLevelData->levelEnd-200;y+=220+RanFl(-60,60))
+	for(y=700;y<(gRouteActive?Route_FinishS():gLevelData->levelEnd)-200;y+=220+RanFl(-60,60))
 		Extended_SpawnAnimal(y);
 }
 
@@ -231,13 +264,13 @@ void Extended_AddTraffic(void)
 		car->dir=dir;
 		car->control=control;
 		if(control==kObjectDriveUp)
-			for(car->target=0;
+			{for(car->target=0;
 				car->target<gTrackUp->num&&gTrackUp->track[car->target].y<car->pos.y;
-				car->target++);
+				car->target++); if(gRouteActive)car->target=Route_TrackTarget(gTrackUp,car->pos);}
 		else
-			for(car->target=0;
+			{for(car->target=0;
 				car->target<gTrackDown->num&&gTrackDown->track[car->target].y>car->pos.y;
-				car->target++);
+				car->target++); if(gRouteActive)car->target=Route_TrackTarget(gTrackDown,car->pos);}
 		extra++;
 	}
 }
@@ -283,16 +316,16 @@ static void ReverseTravelDirection(tObject *car)
 	if(car->control==kObjectDriveUp)
 	{
 		car->control=kObjectDriveDown;
-		for(car->target=0;
+		{for(car->target=0;
 			car->target<gTrackDown->num-1&&gTrackDown->track[car->target].y>car->pos.y;
-			car->target++);
+			car->target++); if(gRouteActive)car->target=Route_TrackTarget(gTrackDown,car->pos);}
 	}
 	else
 	{
 		car->control=kObjectDriveUp;
-		for(car->target=0;
+		{for(car->target=0;
 			car->target<gTrackUp->num-1&&gTrackUp->track[car->target].y<car->pos.y;
-			car->target++);
+			car->target++); if(gRouteActive)car->target=Route_TrackTarget(gTrackUp,car->pos);}
 	}
 }
 
@@ -340,9 +373,9 @@ static void RoadRage(tObject *car,tObject *driver)
 	car->panicUntil=0;
 	car->panicTurn=0;
 	car->control=kObjectCopControl;
-	for(car->target=0;
+	{for(car->target=0;
 		car->target<gTrackUp->num-1&&gTrackUp->track[car->target].y<car->pos.y;
-		car->target++);
+		car->target++); if(gRouteActive)car->target=Route_TrackTarget(gTrackUp,car->pos);}
 	PlaySound(car->pos,car->velo,1.0,1.0,136);	/* horn */
 }
 
@@ -413,6 +446,23 @@ void Extended_SpawnCops(tObject *target,int count)
 		if(!cop)
 			continue;
 		cop->chaseTarget=target;
+		if(gRouteActive)
+		{
+			/* free-form road: down the oncoming lane ahead along the road */
+			float s=Route_Nearest(target->pos,target->routeS>0?target->routeS:-1)+
+				kCopEntryDistance+i*kCopEntryGap+RanFl(0,30),dir;
+			if(s>Route_FinishS()-100)
+			{
+				ObjectStartChaseBehind(cop,target,kStartChaseDist*kScale,kStartChaseSpeed+10);
+				continue;
+			}
+			Route_Point(s,-Route_HalfWidth()*0.45f+((i%3)-1)*14,&cop->pos,&dir);
+			cop->dir=dir+PI;
+			cop->velo=VEC2D_Scale(Route_Heading(s),-kStartChaseSpeed);
+			cop->control=kObjectDriveDown;
+			cop->target=Route_TrackTarget(gTrackDown,cop->pos);
+			continue;
+		}
 		if(gTrackDown->num<2||y>gLevelData->levelEnd-100)
 		{
 			/* Too close to the finish: join the chase from behind. */
@@ -438,6 +488,25 @@ void Extended_SpawnTrafficJam(tObject *target)
 	int types[6],typeCount=FindTrafficTypes(types,6),row,column;
 	if(!target||!typeCount)
 		return;
+	if(gRouteActive)
+	{
+		/* free-form road: the jam ahead along the road, across its width */
+		float start=Route_Nearest(target->pos,target->routeS>0?target->routeS:-1)+kJamDistance;
+		for(row=0;row<kJamRows;row++)
+			for(column=0;column<kJamColumns;column++)
+			{
+				float hw=Route_HalfWidth()-24,dir;
+				tObject *car=NewObject(gFirstObj,types[RanInt(0,typeCount)]);
+				if(!car)
+					continue;
+				Route_Point(start+row*70,-hw+2*hw*(column+0.5f)/kJamColumns,&car->pos,&dir);
+				car->dir=dir;
+				car->velo=VEC2D_Scale(Route_Heading(start+row*70),5);
+				car->control=kObjectDriveUp;
+				car->target=Route_TrackTarget(gTrackUp,car->pos);
+			}
+		return;
+	}
 	for(row=0;row<kJamRows;row++)
 	{
 		float y=target->pos.y+kJamDistance+row*70;
@@ -458,9 +527,9 @@ void Extended_SpawnTrafficJam(tObject *target)
 			car->dir=0;
 			car->velo=P2D(0,5);
 			car->control=kObjectDriveUp;
-			for(car->target=0;
+			{for(car->target=0;
 				car->target<gTrackUp->num-1&&gTrackUp->track[car->target].y<car->pos.y;
-				car->target++);
+				car->target++); if(gRouteActive)car->target=Route_TrackTarget(gTrackUp,car->pos);}
 		}
 	}
 }

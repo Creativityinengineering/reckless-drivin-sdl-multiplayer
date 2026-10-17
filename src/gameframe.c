@@ -8,6 +8,7 @@
 #include "input.h"
 #include "gamesounds.h"
 #include "textfx.h"
+#include "route.h"
 #include "roads.h"
 #include "gameinitexit.h"
 #include "packs.h"
@@ -165,6 +166,8 @@ void ResurrectPlayer()
 		return;
 	}
 	for(i=0;(i<gTrackUp->num)&&(gTrackUp->track[i].y<gPlayerObj->pos.y);i++);
+	if(gRouteActive)	/* free-form road: the track point ahead of the wreck */
+		i=Route_TrackTarget(gTrackUp,gPlayerObj->pos);
 	if(i < 1)
 		i = 1;
 	else if(i >= trackCount)
@@ -407,7 +410,9 @@ void PlayerHandling()
 	}
 	//finish detection
 	if(gCameraObj->pos.y<320)gCameraObj->pos.y=320;
-	if(gPlayerObj->pos.y>gLevelData->levelEnd)
+	if(gRouteActive)	/* free-form road: the finish is a distance along it */
+		Route_TrackObject(gPlayerObj);
+	if(gRouteActive?gPlayerObj->routeS>Route_FinishS():gPlayerObj->pos.y>gLevelData->levelEnd)
 		if(!gCurPlayer->deathDelay&&!gCurPlayer->finishDelay&&
 			!Network_DriverIsFinished(gPlayerObj))
 		{
@@ -444,6 +449,15 @@ void PlayerHandling()
 		}
 	}
 	CrateEffects();
+	/* Off the road (offroad tyres crate) or on the rough edge: grass and
+	   gravel slow the car down, it cannot race there. */
+	if(!(*gRoadInfo).water&&!gPlayerObj->jumpHeight&&!gCurPlayer->deathDelay)
+	{
+		int off=CalcBackCollision(gPlayerObj->pos);
+		float cap=off==2?13:off==1?22:0,velo=VEC2D_Value(gPlayerObj->velo);
+		if(cap&&velo>cap)
+			gPlayerObj->velo=VEC2D_Scale(gPlayerObj->velo,(velo-(velo-cap)*0.06f)/velo);
+	}
 	//spike handling
 	gCurPlayer->spikeFrame+=VEC2D_Value(gPlayerObj->velo)/20;
 	if(gCurPlayer->addOns&kAddOnSpikes&&!(gCurPlayer->deathDelay!=0)&&!(*gRoadInfo).water)

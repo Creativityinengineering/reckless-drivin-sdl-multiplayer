@@ -1,6 +1,8 @@
 #include "compat.h"
 #include <math.h>
 #include "input.h"
+#include "levelgen.h"
+#include "route.h"
 #include "objects.h"
 #include "screen.h"
 #include "vec2d.h"
@@ -53,7 +55,8 @@ void CheckTarget(tObject *theObj)
 	if(!track->num) return;
 	t2DPoint targDist=VEC2D_Difference(P2D(track->track[theObj->target].x,track->track[theObj->target].y),theObj->pos);
 	float sqTargDist=targDist.x*targDist.x+targDist.y*targDist.y;
-	int passed=(theObj->control==kObjectDriveUp||theObj->control==kObjectCopControl)?track->track[theObj->target].y<theObj->pos.y:track->track[theObj->target].y>theObj->pos.y;
+	int passed=gRouteActive?Route_TargetPassed(track,theObj):	/* along the road, any direction */
+		(theObj->control==kObjectDriveUp||theObj->control==kObjectCopControl)?track->track[theObj->target].y<theObj->pos.y:track->track[theObj->target].y>theObj->pos.y;
 	if(sqTargDist<kTargetSwitchDist*kTargetSwitchDist||passed)
 		theObj->target=(theObj->target+1)%track->num;
 }
@@ -100,6 +103,7 @@ void ObjectFollow(tObject *theObj,tTrackInfoSeg *target,tInputData *input)
 	int sideOffs=theObj->control==kObjectDriveUp?-kOvertakeDist*kScale:kOvertakeDist*kScale;
 	int reckless=theObj->recklessUntil>gFrameCount;
 	int dodging=false;
+	float laneOffs=0;
 	float speed=panicking?1.6:(reckless&&CanOvertake(theObj)?1.25:1);
 	int offs;
 	t2DPoint targetDiff;
@@ -161,7 +165,12 @@ void ObjectFollow(tObject *theObj,tTrackInfoSeg *target,tInputData *input)
 			tRoad road=gRoadData+(int)(theObj->pos.y/2);
 			float left,right,want;
 			int side=theObj->pos.x>=driver->pos.x?1:-1;
-			if((*road)[1]==(*road)[2]){left=(*road)[0];right=(*road)[3];}
+			if(gRouteActive)	/* free-form road: the piece the car is on */
+			{
+				if(!Route_SpanAt(theObj->pos.x,theObj->pos.y,&left,&right))
+					left=right=theObj->pos.x;
+			}
+			else if((*road)[1]==(*road)[2]){left=(*road)[0];right=(*road)[3];}
 			else if(theObj->pos.x>=(*road)[2]){left=(*road)[2];right=(*road)[3];}
 			else{left=(*road)[0];right=(*road)[1];}
 			left+=18;
@@ -175,7 +184,19 @@ void ObjectFollow(tObject *theObj,tTrackInfoSeg *target,tInputData *input)
 			dodging=true;
 		}
 	}
-	targetDiff=VEC2D_Difference(P2D(target->x+offs,target->y),theObj->pos);
+	/* Generated multi-lane road: each car keeps to its own lane beside the
+	   track (not an overtaking offset: no extra speed). */
+	if(!offs&&gGenLanes>1&&theObj->type->flags&kObjectWheelFlag&&!(theObj->type->flags&kObjectCop)&&
+		!Network_IsDriverObject(theObj)&&theObj!=gPlayerObj&&
+		(theObj->control==kObjectDriveUp||theObj->control==kObjectDriveDown))
+	{
+		if(!theObj->lane)
+			theObj->lane=(SInt8)RanInt(1,7);
+		laneOffs=LevelGen_LaneOffset(theObj->lane,target->x,target->y);
+		if(theObj->control==kObjectDriveDown)
+			laneOffs=-laneOffs;
+	}
+	targetDiff=VEC2D_Difference(P2D(target->x+offs+laneOffs,target->y),theObj->pos);
 	targetDist=VEC2D_Value(targetDiff);
 	input->throttle=(velo<(((*objType).flags&kObjectSlow)?0.6:1)*(offs&&!dodging?2:1)*speed*target->velo)?1:0;
 	input->brake=0;
@@ -218,6 +239,21 @@ void ObjectStartChaseBehind(tObject *theObj,const tObject *driver,int distance,f
 	int target;
 	if(gTrackUp->num<2)
 		return;
+	if(gRouteActive)
+	{
+		/* free-form road: behind the driver along the road, on its lane */
+		float s=Route_Nearest(driver->pos,driver->routeS>0?driver->routeS:-1)-kStartChaseDist*kScale,dir;
+		t2DPoint heading;
+		if(s<50)
+			s=50;
+		Route_Point(s,Route_HalfWidth()*0.45f,&theObj->pos,&dir);
+		heading=Route_Heading(s);
+		theObj->dir=dir;
+		theObj->velo=VEC2D_Scale(heading,velo);
+		theObj->control=kObjectCopControl;
+		theObj->target=Route_TrackTarget(gTrackUp,theObj->pos);
+		return;
+	}
 	for(target=1;
 		(target<gTrackUp->num)&&(gTrackUp->track[target].y<driver->pos.y-distance);
 		target++);
@@ -306,9 +342,9 @@ void CopFollow(tObject *theObj,tInputData *input)
 		theObj->chaseTarget=NULL;
 		theObj->warTargetId=0;
 		theObj->control=down?kObjectDriveDown:kObjectDriveUp;
-		for(theObj->target=0;theObj->target<track->num-1&&
+		{for(theObj->target=0;theObj->target<track->num-1&&
 			(down?track->track[theObj->target].y>theObj->pos.y:track->track[theObj->target].y<theObj->pos.y);
-			theObj->target++);
+			theObj->target++); if(gRouteActive)theObj->target=Route_TrackTarget(track,theObj->pos);}
 		input->throttle=0;
 		input->brake=0;
 		input->steering=0;

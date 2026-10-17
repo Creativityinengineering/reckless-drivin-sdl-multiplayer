@@ -18,6 +18,8 @@
 #include "interface.h"
 #include "netgame.h"
 #include "textrender.h"
+#include "levelgen.h"
+#include "route.h"
 #include "hqassets.h"
 #include "high.h"
 
@@ -1108,7 +1110,7 @@ void DrawSpriteLayerZoomed(float xDrawStart,float yDrawStart,float zoom,float ti
 	float maxDrawOffs=128*invZoom;
 	while(theObj!=gLastVisObj)
 	{
-		if(theObj->layer==layer)
+		if(theObj->layer==layer&&(gRouteDrawPass<0||Route_ObjectLevel(theObj)==gRouteDrawPass))
 			if(theObj->frame&&!theObj->jumpHeight)
 			{
 				float x=(theObj->pos.x-xDrawStart)*invZoom;
@@ -1130,7 +1132,7 @@ void DrawSpriteLayerBlurZoomed(float xDrawStart,float yDrawStart,float zoom,floa
 	float maxDrawOffs=128*invZoom;
 	while(theObj!=gLastVisObj)
 	{
-		if(theObj->layer==layer)
+		if(theObj->layer==layer&&(gRouteDrawPass<0||Route_ObjectLevel(theObj)==gRouteDrawPass))
 			if(theObj->frame&&!theObj->jumpHeight)
 			{
 				float x=(theObj->pos.x-xDrawStart)*invZoom;
@@ -1165,7 +1167,7 @@ void DrawSpritesZoomed(float xDrawStart,float yDrawStart,float zoom)
 	theObj=gFirstVisObj;
 	while(theObj!=gLastVisObj)
 	{
-		if(theObj->frame&&theObj->jumpHeight)
+		if(theObj->frame&&theObj->jumpHeight&&(gRouteDrawPass<0||Route_ObjectLevel(theObj)==gRouteDrawPass))
 		{
 			float x=(theObj->pos.x-xDrawStart)*invZoom;
 			float y=(yDrawStart-theObj->pos.y)*invZoom;
@@ -1215,6 +1217,51 @@ static void DrawShieldRings(float xDrawStart,float yDrawStart,float zoom)
 		for(angle=0;angle<2*PI;angle+=step)
 			BlendDot(fb,stride,(int)(cx+cos(angle)*radius),(int)(cy+sin(angle)*radius),
 				size,PixelRGB(120,230,255),alpha);
+	}
+}
+
+/* Generated levels: overpasses, another road crossing on a bridge. Drawn
+   over the cars (they drive underneath), with its shadow on the road. */
+static void FillWorldBand(tPixel *fb,int stride,float x0,float x1,float y0,float y1,
+	float xDrawStart,float yDrawStart,float zoom,tPixel color,int alpha)
+{
+	int sx0=(int)((x0-xDrawStart)/zoom),sx1=(int)((x1-xDrawStart)/zoom);
+	int sy0=(int)((yDrawStart-y1)/zoom),sy1=(int)((yDrawStart-y0)/zoom);
+	int x,y;
+	if(sx0<0)sx0=0;
+	if(sx1>gXSize)sx1=gXSize;
+	if(sy0<0)sy0=0;
+	if(sy1>gYSize)sy1=gYSize;
+	for(y=sy0;y<sy1;y++)
+	{
+		tPixel *row=fb+y*stride;
+		for(x=sx0;x<sx1;x++)
+			row[x]=alpha>=255?color:BlendAlpha(color,row[x],alpha);
+	}
+}
+
+static void DrawOverpasses(float xDrawStart,float yDrawStart,float zoom)
+{
+	tPixel *fb=(tPixel*)gBaseAddr;
+	int stride=gRowBytes/4,i,count;
+	const float *heights;
+	count=LevelGen_GetBridges(&heights);
+	for(i=0;i<count;i++)
+	{
+		float y=heights[i],left,right,x;
+		int row=(int)(y/2);
+		if((yDrawStart-y)/zoom<-200||(yDrawStart-y)/zoom>gYSize+200)
+			continue;
+		left=gRoadData[row][0]-600;
+		right=gRoadData[row][3]+600;
+		/* shadow on the road, then the deck with its railings */
+		FillWorldBand(fb,stride,left,right,y-78,y-34,xDrawStart,yDrawStart,zoom,PixelRGB(0,0,0),90);
+		FillWorldBand(fb,stride,left,right,y-34,y+34,xDrawStart,yDrawStart,zoom,PixelRGB(150,150,146),255);
+		FillWorldBand(fb,stride,left,right,y+34,y+42,xDrawStart,yDrawStart,zoom,PixelRGB(205,205,200),255);
+		FillWorldBand(fb,stride,left,right,y-42,y-34,xDrawStart,yDrawStart,zoom,PixelRGB(95,95,92),255);
+		FillWorldBand(fb,stride,left,right,y-3,y+3,xDrawStart,yDrawStart,zoom,PixelRGB(130,130,126),255);
+		for(x=left+20;x<right;x+=90)	/* the crossing road's middle line */
+			FillWorldBand(fb,stride,x,x+46,y-2,y+2,xDrawStart,yDrawStart,zoom,PixelRGB(235,235,225),255);
 	}
 }
 
@@ -1315,11 +1362,20 @@ void RenderFrame()
 	float xDrawStart=gCameraObj->pos.x-gXSize*kXCameraScreenPos*zoom;
 	float yDrawStart=gCameraObj->pos.y+gYSize*kYCameraScreenPos*zoom;
 	int preSpecBlit=gScreenBlitSpecial;
-	if(gCurPlayer->finishDelay)
+	if(gRouteActive)
+	{
+		/* free-form road: look ahead the way the road goes */
+		float screenX,screenY;
+		Route_CameraPos((int)(gCurPlayer-gPlayers),gCameraObj->pos,&screenX,&screenY);
+		xDrawStart=gCameraObj->pos.x-gXSize*screenX*zoom;
+		yDrawStart=gCameraObj->pos.y+gYSize*screenY*zoom;
+	}
+	else if(gCurPlayer->finishDelay)
 		yDrawStart=gLevelData->levelEnd+gYSize*kYCameraScreenPos*zoom;
 	if(gPrefs.hiColor){
 		DrawRoadZoomed16(xDrawStart,yDrawStart,zoom);
 		DrawMarksZoomed16(xDrawStart,yDrawStart,zoom);
+		Route_DrawMarks(xDrawStart,yDrawStart,zoom);
 		DrawTracksZoomed16(xDrawStart,yDrawStart,zoom);
 	}
 	else{
@@ -1328,9 +1384,24 @@ void RenderFrame()
 		DrawTracksZoomed(xDrawStart,yDrawStart,zoom);
 	}
 	DrawParticleFXZoomed(xDrawStart,yDrawStart,zoom,0);
-	DrawSpritesZoomed(xDrawStart,yDrawStart,zoom);
-	/* Everything from here on stays in front of the GPU-drawn AI sprites. */
-	Platform_BeginForeground(0);
+	if(gRouteActive)
+	{
+		/* the cars below the bridges, the bridges, the cars on them */
+		gRouteDrawPass=0;
+		DrawSpritesZoomed(xDrawStart,yDrawStart,zoom);
+		Platform_BeginForeground(0);
+		Route_DrawBridges(xDrawStart,yDrawStart,zoom);
+		gRouteDrawPass=1;
+		DrawSpritesZoomed(xDrawStart,yDrawStart,zoom);
+		gRouteDrawPass=-1;
+	}
+	else
+	{
+		DrawSpritesZoomed(xDrawStart,yDrawStart,zoom);
+		/* Everything from here on stays in front of the GPU-drawn AI sprites. */
+		Platform_BeginForeground(0);
+	}
+	DrawOverpasses(xDrawStart,yDrawStart,zoom);
 	DrawBikeLights(xDrawStart,yDrawStart,zoom);
 	DrawShieldRings(xDrawStart,yDrawStart,zoom);
 	DrawNameTags(xDrawStart,yDrawStart,zoom);

@@ -123,6 +123,9 @@ typedef struct{
 	UInt32 recklessUntil;	/* shaken by a crash: drives recklessly until this frame */
 	SInt8 overtakeSide;		/* 1 = pass on the usual side, -1 = the other side */
 	SInt8 panicTurn;		/* panicking car turning round: steering side, 0 = no */
+	SInt8 lane;				/* generated multi-lane road: the car's lane + 1, 0 = not chosen yet */
+	float routeS;			/* free-form road: how far along it the object is, 0 = not known */
+	UInt8 onBridge;			/* free-form road: driving on a bridge (falls off its sides) */
 	float panicTurnDir;		/* heading at which the turn is complete */
 	/* LAN: the host simulates the world and sends it to the clients */
 	SInt16 typeRes;			/* resource id of type */

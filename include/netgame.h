@@ -2,6 +2,7 @@
 #define __NETGAME
 
 #include "objects.h"
+#include "levelgen.h"
 
 #define kNetworkMaxPlayers kMaxPlayers
 
@@ -25,6 +26,8 @@ int Network_IsSlotActive(int slot);
 const char *Network_GetSlotName(int slot);
 void Network_SetLocalName(const char *name);
 int Network_TakeHostLevel(void);
+int Network_GetLevelGen(tLevelGen *gen);	/* 1: build generated levels */
+
 int Network_InitClient(const char *address, unsigned short port);
 void Network_SetLobbyPlayerLimit(int count);
 void Network_EnableLocalTwoPlayer(void);

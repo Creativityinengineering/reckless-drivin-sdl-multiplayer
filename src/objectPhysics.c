@@ -1,4 +1,5 @@
 #include "compat.h"
+#include "route.h"
 #include <math.h>
 #include "input.h"
 #include "objects.h"
@@ -406,9 +407,24 @@ void BurnObj(tObject *theObj)
 }
 
 void Explosion(t2DPoint pos,t2DPoint velo,int offs,float mass,int sound);
+void FallDamage(tObject *theObj);
 
 void ObjectPhysics(tObject *theObj)
 {
+	/* free-form road: off a bridge's side the car drops onto the road
+	   below, battered, and drives on down there */
+	if(gRouteActive&&!theObj->replica&&theObj->type->flags&kObjectWheelFlag&&
+		Route_FellOffBridge(theObj))
+	{
+		FallDamage(theObj);
+		theObj->velo=VEC2D_Scale(theObj->velo,0.7f);
+		theObj->rotVelo*=0.5f;
+		/* a short flight down: drawn as a jump, then the landing thud and
+		   jolt of an ordinary jump */
+		theObj->jumpHeight=6;
+		theObj->jumpVelo=9;
+		PlaySound(theObj->pos,theObj->velo,1.0,0.8,141);
+	}
 	if(!theObj->jumpHeight||theObj->type->flags&kObjectHeliFlag)
 	{
 		if(theObj->type->flags&kObjectWheelFlag)

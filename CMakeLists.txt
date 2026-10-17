@@ -48,6 +48,8 @@ endif()
 set(SOURCES
     src/main.c
     src/netgame.c
+    src/levelgen.c
+    src/route.c
     src/player.c
     src/jobs.c
     src/extended.c

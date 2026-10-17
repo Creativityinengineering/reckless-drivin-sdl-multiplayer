@@ -1,4 +1,6 @@
 #include "compat.h"
+#include "route.h"
+#include "levelgen.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -158,12 +160,50 @@ t2DPoint GetUniquePosLimited(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *di
 	return pos;
 }
 
+/* Free-form road (route.c): along it instead of up the screen. Traffic on
+   its lane facing the way it drives; scenery beside the road, off every
+   piece of it (offsets as from the road's edge). */
+static t2DPoint GetUniqueRoutePos(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir)
+{
+	t2DPoint pos=P2D(0,0);
+	int ok=0,tries=sUniquePosLimit?sUniquePosLimit:400;
+	float hw=Route_HalfWidth();
+	do{
+		float s=RanFl(500,Route_FinishS()),heading;
+		if(*objDir==-1)
+		{
+			int up=RanProb(0.5),i;
+			float sqdist;
+			Route_Point(s,(up?1:-1)*hw*(gGenLanes>1?0.5f:0.45f),&pos,&heading);
+			*dir=up?kObjectDriveUp:kObjectDriveDown;
+			GetCloseObj(pos,nil,&sqdist);
+			ok=(sqdist>kScale*kScale*kMinCarDist*kMinCarDist)&&!Route_BackCollision(pos,0);
+			if(ok)
+			{
+				*objDir=up?heading:heading+PI;
+			}
+		}
+		else
+		{
+			int left=RanInt(0,2)==0;
+			float offs=RanFl(minOffs,maxOffs);
+			Route_Point(s,(left?-1:1)*(hw-offs),&pos,&heading);
+			ok=offs<0?Route_BackCollision(pos,0)==2:!Route_BackCollision(pos,0);
+			*dir=kObjectNoInput;
+		}
+	}while(!ok&&--tries>0);
+	sUniquePosFailed=!ok;
+	return pos;
+}
+
 t2DPoint GetUniquePos(SInt16 minOffs,SInt16 maxOffs,float *objDir,int *dir)
 {
 	t2DPoint pos;
 	int ok;
 	int target;
 	int tries=sUniquePosLimit;
+	if(gRouteActive)
+		return GetUniqueRoutePos(minOffs,maxOffs,objDir,dir);
 	do{
 		tRoad roadData;
 		float sqdist;
@@ -308,13 +348,13 @@ void InsertObjectGroup(tObjectGroupReference groupRef)
 		}
 		theObj->control+=control;
 		if((theObj->control&0x0000000f)==kObjectDriveUp)
-			for(theObj->target=0;
+			{for(theObj->target=0;
 				(theObj->target<gTrackUp->num)&&(gTrackUp->track[theObj->target].y<theObj->pos.y);
-				theObj->target++);
+				theObj->target++); if(gRouteActive)theObj->target=Route_TrackTarget(gTrackUp,theObj->pos);}
 		else
-			for(theObj->target=0;
+			{for(theObj->target=0;
 				(theObj->target<gTrackDown->num)&&(gTrackDown->track[theObj->target].y>theObj->pos.y);
-				theObj->target++);
+				theObj->target++); if(gRouteActive)theObj->target=Route_TrackTarget(gTrackDown,theObj->pos);}
 	}
 }
 
@@ -397,7 +437,10 @@ void RemoveObject(tObject *theObj)
 
 int CalcBackCollision(t2DPoint pos)
 {
-	tRoad roadData=gRoadData+(int)(pos.y/2);
+	tRoad roadData;
+	if(gRouteActive)	/* free-form road: any piece of it, ground or bridge */
+		return Route_BackCollision(pos,(*gRoadInfo).tolerance);
+	roadData=gRoadData+(int)(pos.y/2);
 	if((*roadData)[0]>pos.x)
 		return ((*roadData)[0]-pos.x)>(*gRoadInfo).tolerance?2:1;
 	if((*roadData)[3]<pos.x)

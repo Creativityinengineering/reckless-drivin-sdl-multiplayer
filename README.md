@@ -107,6 +107,18 @@ player stays as it was; the original traffic and add-ons are one setting away
   with their own car, controls, lives, score and finish result
 - **Driver names:** type your name in the LAN lobby (**N**); the others see it
   in their lobby and over your car during the race
+- **Level generator:** in the multiplayer menu (**G** or the **LEVEL**
+  button) choose generated levels instead of the original ten: pick a world
+  (highway, coast, dirt track, river with boats, ice road, night drive,
+  mountain pass and more), length, curves, lanes (up to a three-lane
+  divided highway full of traffic), traffic, traffic speed, police, jumps
+  and time limit, plus a seed. A map shows the whole track before you play.
+  With **crossings** the road loops round and crosses itself on a bridge:
+  cars underneath and on top do not touch, and a car knocked off the side of
+  the bridge drops onto the road below, battered, and drives on.
+  Everything ends up in a level code like `CQGS-2223-6TSX`: write it down or
+  save it in the game, and the same code builds exactly the same level
+  again, on any computer. On a LAN the host's levels are used by everyone.
 - **Bigger add-on display (Extended mode):** the cockpit's red add-on display
   grows by a row; the timed crates show there as red pictures like the
   original add-ons, blinking when they run out

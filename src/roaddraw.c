@@ -1,4 +1,5 @@
 #include "compat.h"
+#include "route.h"
 #include <math.h>
 #include <string.h>
 #include "roads.h"
@@ -485,8 +486,72 @@ static Ptr DrawBorderLineZoomed16(Ptr drawPos,const tRoadFrame *frame,
 	return drawPos;
 }
 
+/* Free-form road (route.c): a row is any number of road pieces with grass
+   and borders between them. */
+static void DrawRouteRow16(const tRoadFrame *frame,int screenY)
+{
+	float xDrawStart=frame->xDrawStart,zoom=frame->zoom,invZoom=frame->invZoom;
+	Ptr rowStart=gBaseAddr+screenY*gRowBytes;
+	Ptr drawPos=rowStart;
+	float worldY=frame->yDrawStart-screenY*zoom;
+	const SInt16 *spans;
+	int count=Route_RowSpans((int)(worldY*0.5f),0,&spans),k;
+	int previous=0x80000000;
+	float previousExact=-2147483648.0f;
+	for(k=0;k<count;k++)
+	{
+		float leftExact=(spans[2*k]-xDrawStart)*invZoom;
+		float rightExact=(spans[2*k+1]-xDrawStart)*invZoom;
+		int left=(int)leftExact,right=(int)rightExact;
+		if(left>=gXSize)
+			break;
+		if(right<=0)
+		{
+			previous=right;
+			previousExact=rightExact;
+			continue;
+		}
+		drawPos=DrawBorderLineZoomed16(drawPos,frame,previous,left,previousExact,leftExact,worldY);
+		drawPos=DrawLineZoomed16((tPixel*)drawPos,xDrawStart,left,right,worldY,0,0,
+			(UInt16*)frame->roadTex,zoom,frame->roadHQ);
+		previous=right;
+		previousExact=rightExact;
+	}
+	drawPos=DrawBorderLineZoomed16(drawPos,frame,previous,0x7fffffff,previousExact,
+		2147483647.0f,worldY);
+	if(drawPos!=rowStart+gXSize*(int)sizeof(tPixel))
+		SDL_AtomicAdd((SDL_atomic_t*)&frame->spanErrors,1);
+}
+
+/* The bridges' road surface, drawn after the cars below them. */
+void DrawRouteDeck16(float xDrawStart,float yDrawStart,float zoom)
+{
+	UInt16 *roadTex=(UInt16*)GetUnsortedPackEntry(kPackTx16,(*gRoadInfo).foregroundTex,0);
+	const tHQImage *roadHQ=HQAssets_Load("textures",(*gRoadInfo).foregroundTex,0);
+	int screenY;
+	for(screenY=0;screenY<gYSize;screenY++)
+	{
+		float worldY=yDrawStart-screenY*zoom;
+		const SInt16 *spans;
+		int count=Route_RowSpans((int)(worldY*0.5f),1,&spans),k;
+		for(k=0;k<count;k++)
+		{
+			int left=(int)((spans[2*k]-xDrawStart)/zoom),right=(int)((spans[2*k+1]-xDrawStart)/zoom);
+			if(right<=0||left>=gXSize)
+				continue;
+			DrawLineZoomed16((tPixel*)(gBaseAddr+screenY*gRowBytes)+(left<0?0:left),xDrawStart,
+				left,right,worldY,0,0,roadTex,zoom,roadHQ);
+		}
+	}
+}
+
 static void DrawRoadRow16(const tRoadFrame *frame,int screenY)
 {
+	if(gRouteActive)
+	{
+		DrawRouteRow16(frame,screenY);
+		return;
+	}
 	float xDrawStart=frame->xDrawStart,zoom=frame->zoom,invZoom=frame->invZoom;
 	Ptr rowStart=gBaseAddr+screenY*gRowBytes;
 	Ptr drawPos=rowStart;
