@@ -23,7 +23,10 @@ extern int gRouteDrawPass;	/* sprites: -1 all, 0 below the bridges, 1 on them */
    half width, and which points are on a bridge; builds what the engine
    asks for. finishS: road length at the finish line. */
 #define kRouteStep 2.0f
-int Route_Setup(tRoutePoint *points, int count, float halfWidth, UInt8 *deck, float finishS);
+/* Forks (optional): side road points, how far along the road each counts,
+   and which fork each belongs to; also taken over. */
+int Route_Setup(tRoutePoint *points, int count, float halfWidth, UInt8 *deck, float finishS,
+	tRoutePoint *branch, float *branchS, UInt8 *branchId, int branchCount);
 void Route_Dispose(void);
 
 float Route_Length(void);
@@ -66,6 +69,7 @@ void Route_TrackObject(void *object);	/* updates its routeS */
 int Route_TrackTarget(const void *track, t2DPoint pos);
 int Route_TargetPassed(const void *track, void *object);
 float Route_BridgeS(int index);
+float Route_ForkS(int index);	/* where the i-th fork leaves the road, -1: none */
 int Route_FellOffBridge(void *object);
 void Route_Landed(void *object);	/* a jump ended: bridge or below */
 int Route_WallBelow(void *object);	/* below a bridge: walls beside the road */	/* thrown off a bridge's side: falls */	/* where the i-th bridge starts, -1: none */

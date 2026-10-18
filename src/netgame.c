@@ -49,7 +49,7 @@ typedef socklen_t NetworkSockLen;
 #endif
 
 #define kNetworkMagic 0x52444d50u
-#define kNetworkVersion 20
+#define kNetworkVersion 21
 #define kNetworkIntervalMS 50
 #define kNetworkTimeoutMS 10000
 

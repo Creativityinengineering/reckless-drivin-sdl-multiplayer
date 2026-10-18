@@ -256,6 +256,7 @@ to finish (red), with its bridges.
 | **Jumps** | None, Some, Many, Lots (ramps only on long straight stretches, so every jump lands) |
 | **Time limit** | Relaxed, Normal, Tight, Brutal |
 | **Crossings** | None, One, Two, Three: the road loops round (to the right or the left) and crosses itself on a bridge |
+| **Forks** | None, One, Two, Three: a side road leaves the road and joins it again; both ways are drivable |
 | **Seed** | Any number (type the digits, **R** for a random one) |
 
 **Level codes.** The seed and all settings together make a level code such as

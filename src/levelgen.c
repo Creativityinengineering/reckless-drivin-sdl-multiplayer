@@ -11,7 +11,7 @@
 
 /* ---- Settings ---- */
 
-tLevelGen gLevelGen = {12345, 0, 1, 1, 1, 2, 1, 1, 1, 1, 0};
+tLevelGen gLevelGen = {12345, 0, 1, 1, 1, 2, 1, 1, 1, 1, 0, 0};
 int gLevelGenOn;
 static tLevelGen sSaved[kMaxSavedLevels];
 static int sSavedCount;
@@ -21,7 +21,7 @@ static const char *const kLandscapes[kGenLandscapes] = {
 	"HARBOUR", "ICE ROAD", "NIGHT DRIVE", "MOUNTAIN PASS", "GAUNTLET"
 };
 
-static const char *const kChoices[9][kGenChoices] = {
+static const char *const kChoices[10][kGenChoices] = {
 	{"SHORT", "NORMAL", "LONG", "MARATHON"},	/* length */
 	{"STRAIGHT", "GENTLE", "TWISTY", "CRAZY"},	/* curves */
 	{"NARROW", "NORMAL", "2 LANES", "3 LANES"},	/* road width: lanes per direction */
@@ -30,7 +30,8 @@ static const char *const kChoices[9][kGenChoices] = {
 	{"NONE", "FEW", "NORMAL", "MANY"},	/* police */
 	{"NONE", "SOME", "MANY", "LOTS"},	/* jumps */
 	{"RELAXED", "NORMAL", "TIGHT", "BRUTAL"},	/* time limit */
-	{"NONE", "ONE", "TWO", "THREE"}	/* crossings: loops over a bridge */
+	{"NONE", "ONE", "TWO", "THREE"},	/* crossings: loops over a bridge */
+	{"NONE", "ONE", "TWO", "THREE"}	/* forks: side roads */
 };
 
 const char *LevelGen_LandscapeName(int landscape)
@@ -40,7 +41,7 @@ const char *LevelGen_LandscapeName(int landscape)
 
 const char *LevelGen_ChoiceName(int setting, int value)
 {
-	if (setting < 0 || setting >= 9 || value < 0 || value >= kGenChoices)
+	if (setting < 0 || setting >= 10 || value < 0 || value >= kGenChoices)
 		return "?";
 	return kChoices[setting][value];
 }
@@ -55,7 +56,8 @@ UInt32 LevelGen_Pack(const tLevelGen *gen)
 		(UInt32)(gen->curves & 3) << 6 | (UInt32)(gen->width & 3) << 8 |
 		(UInt32)(gen->traffic & 3) << 10 | (UInt32)(gen->speed & 3) << 12 |
 		(UInt32)(gen->cops & 3) << 14 | (UInt32)(gen->jumps & 3) << 16 |
-		(UInt32)(gen->time & 3) << 18 | (UInt32)(gen->crossings & 3) << 20;
+		(UInt32)(gen->time & 3) << 18 | (UInt32)(gen->crossings & 3) << 20 |
+		(UInt32)(gen->forks & 3) << 22;
 }
 
 void LevelGen_Unpack(UInt32 packed, UInt32 seed, tLevelGen *gen)
@@ -73,6 +75,7 @@ void LevelGen_Unpack(UInt32 packed, UInt32 seed, tLevelGen *gen)
 	gen->jumps = (UInt8)(packed >> 16 & 3);
 	gen->time = (UInt8)(packed >> 18 & 3);
 	gen->crossings = (UInt8)(packed >> 20 & 3);
+	gen->forks = (UInt8)(packed >> 22 & 3);
 }
 
 static UInt8 CodeCheck(UInt64 bits)
@@ -80,17 +83,18 @@ static UInt8 CodeCheck(UInt64 bits)
 	return (UInt8)((bits * 0x9E3779B97F4A7C15ull) >> 56 ^ 0x5A);
 }
 
-/* Crossings came later: they change the check letter's value, so the
-   codes from before (no crossings) stay exactly the same. */
-static UInt8 CrossingsCheck(UInt64 bits, int crossings)
+/* Crossings and forks came later: they change the check letter's value
+   (extra = crossings + 4 * forks), so the codes from before stay exactly
+   the same. */
+static UInt8 CrossingsCheck(UInt64 bits, int extra)
 {
-	return (UInt8)(CodeCheck(bits) ^ (crossings * 0x6D));
+	return (UInt8)(CodeCheck(bits) ^ (extra * 0x6D));
 }
 
 void LevelGen_Encode(const tLevelGen *gen, char code[kLevelCodeSize])
 {
 	UInt64 bits = (UInt64)(LevelGen_Pack(gen) & 0xFFFFF) << 32 | gen->seed;	/* 52 bits */
-	UInt64 all = bits << 8 | CrossingsCheck(bits, gen->crossings & 3);	/* 60 bits: 12 letters */
+	UInt64 all = bits << 8 | CrossingsCheck(bits, (gen->crossings & 3) + 4 * (gen->forks & 3));	/* 60 bits: 12 letters */
 	int i, out = 0;
 	for (i = 0; i < 12; ++i) {
 		if (i == 4 || i == 8)
@@ -123,10 +127,11 @@ int LevelGen_Decode(const char *code, tLevelGen *gen)
 	if ((bits >> 32 & 15) >= kGenLandscapes)
 		return 0;
 	{
-		int crossings;
-		for (crossings = 0; crossings < 4; ++crossings)
-			if (CrossingsCheck(bits, crossings) == (UInt8)(all & 255)) {
-				LevelGen_Unpack((UInt32)(bits >> 32) | (UInt32)crossings << 20, (UInt32)bits, gen);
+		int extra;
+		for (extra = 0; extra < 16; ++extra)
+			if (CrossingsCheck(bits, extra) == (UInt8)(all & 255)) {
+				LevelGen_Unpack((UInt32)(bits >> 32) | (UInt32)(extra & 3) << 20 |
+					(UInt32)(extra >> 2) << 22, (UInt32)bits, gen);
 				return 1;
 			}
 	}
@@ -786,6 +791,103 @@ failed:
 	return 0;
 }
 
+/* Forks: a side road leaves the road to one side and joins it again,
+   on stretches without bridges and away from the rest of the road. */
+typedef struct {
+	tRoutePoint *points;
+	float *s;
+	UInt8 *id;
+	int count;
+} tForks;
+
+static void FreeForks(tForks *forks)
+{
+	free(forks->points);
+	free(forks->s);
+	free(forks->id);
+	memset(forks, 0, sizeof(*forks));
+}
+
+static int MakeForks(const tLevelGen *gen, const tPath *path, float finishS, float hw, tForks *forks)
+{
+	int fork, wanted = gen->forks & 3, made = 0, capacity = 0;
+	float used[4][2];
+	memset(forks, 0, sizeof(*forks));
+	for (fork = 0; fork < wanted; ++fork) {
+		int tries;
+		for (tries = 0; tries < 30; ++tries) {
+			float s0 = RndF(2500, finishS - 5500), length = RndF(2200, 3600), s1 = s0 + length;
+			float side = RndI(0, 1) ? 1.0f : -1.0f, offset = 2 * hw + RndF(260, 520), s;
+			int i0 = (int)(s0 / kRouteStep), i1 = (int)(s1 / kRouteStep), i, k, ok = 1, start;
+			for (k = 0; k < made && ok; ++k)
+				if (s1 > used[k][0] - 1500 && s0 < used[k][1] + 1500)
+					ok = 0;
+			for (i = i0 - 300; i <= i1 + 300 && ok; ++i)	/* no bridge near it */
+				if (i >= 0 && i < path->count && path->deck[i])
+					ok = 0;
+			if (!ok)
+				continue;
+			start = forks->count;
+			for (s = s0; s <= s1; s += kRouteStep) {
+				int j = (int)(s / kRouteStep);
+				float t = (s - s0) / length, f = (1 - cosf(6.2831853f * t)) * 0.5f, lateral;
+				const tRoutePoint *p;
+				if (j >= path->count)
+					break;
+				p = &path->points[j];
+				lateral = side * offset * f;
+				if (forks->count == capacity) {
+					capacity = capacity ? capacity * 2 : 4096;
+					forks->points = (tRoutePoint *)realloc(forks->points, (size_t)capacity * sizeof(tRoutePoint));
+					forks->s = (float *)realloc(forks->s, (size_t)capacity * sizeof(float));
+					forks->id = (UInt8 *)realloc(forks->id, (size_t)capacity);
+					if (!forks->points || !forks->s || !forks->id) {
+						FreeForks(forks);
+						return 0;
+					}
+				}
+				forks->points[forks->count].x = p->x + p->hy * lateral;
+				forks->points[forks->count].y = p->y - p->hx * lateral;
+				forks->s[forks->count] = s;
+				forks->id[forks->count] = (UInt8)(made + 1);
+				forks->count++;
+			}
+			/* headings, and away from the rest of the road */
+			for (i = start; i < forks->count && ok; ++i) {
+				int a = i > start ? i - 1 : i, b = i + 1 < forks->count ? i + 1 : i;
+				float hx = forks->points[b].x - forks->points[a].x, hy = forks->points[b].y - forks->points[a].y;
+				float l = sqrtf(hx * hx + hy * hy);
+				forks->points[i].hx = l > 0 ? hx / l : path->points[(int)(forks->s[i] / kRouteStep)].hx;
+				forks->points[i].hy = l > 0 ? hy / l : path->points[(int)(forks->s[i] / kRouteStep)].hy;
+				/* (where it leaves and joins it lies on the road by design:
+				   only the part away from it is checked) */
+				if ((i - start) % 10 || (1 - cosf(6.2831853f * (forks->s[i] - s0) / length)) * 0.5f * offset < 2 * hw)
+					continue;
+				for (k = 0; k < path->count; k += 8) {
+					float dx, dy;
+					if (k * kRouteStep > s0 - 900 && k * kRouteStep < s1 + 900)
+						continue;
+					dx = path->points[k].x - forks->points[i].x;
+					dy = path->points[k].y - forks->points[i].y;
+					if (dx * dx + dy * dy < (2 * hw + 120) * (2 * hw + 120)) {
+						ok = 0;
+						break;
+					}
+				}
+			}
+			if (!ok) {
+				forks->count = start;
+				continue;
+			}
+			used[made][0] = s0;
+			used[made][1] = s1;
+			made++;
+			break;
+		}
+	}
+	return 1;
+}
+
 /* Map for the menu: every step-th point of the road and where it is a
    bridge. */
 int LevelGen_PreviewRoute(const tLevelGen *gen, float *xs, float *ys, UInt8 *bridge, int max)
@@ -793,17 +895,26 @@ int LevelGen_PreviewRoute(const tLevelGen *gen, float *xs, float *ys, UInt8 *bri
 	tPath path;
 	float finishS;
 	int i, n = 0, step;
+	tForks forks;
 	if (!GenerateRoute(gen, 0, &path, &finishS))
 		return 0;
-	step = path.count / max + 1;
+	MakeForks(gen, &path, finishS, RouteHalfWidth(gen), &forks);
+	step = path.count / (max * 3 / 4) + 1;
 	for (i = 0; i < path.count && n < max; i += step) {
 		xs[n] = path.points[i].x;
 		ys[n] = path.points[i].y;
 		bridge[n] = path.deck[i];
 		n++;
 	}
+	for (i = 0; i < forks.count && n < max; i += step) {
+		xs[n] = forks.points[i].x;
+		ys[n] = forks.points[i].y;
+		bridge[n] = 0;
+		n++;
+	}
 	free(path.points);
 	free(path.deck);
+	FreeForks(&forks);
 	return n;
 }
 
@@ -814,11 +925,18 @@ static int BuildRoute(const tLevelGen *gen, int levelIndex, const tBaseLevel *ba
 	tPath path;
 	float finishS, hw = RouteHalfWidth(gen), lane, length, s;
 	int i, count, rows, row;
+	tForks forks;
 	if (!GenerateRoute(gen, levelIndex, &path, &finishS))
 		return 0;
+	if (!MakeForks(gen, &path, finishS, hw, &forks)) {
+		free(path.points);
+		free(path.deck);
+		return 0;
+	}
 	gGenLanes = (gen->width & 3) >= 2 ? (gen->width & 3) : 1;
 	/* route.c takes the points over */
-	if (!Route_Setup(path.points, path.count, hw, path.deck, finishS))
+	if (!Route_Setup(path.points, path.count, hw, path.deck, finishS,
+		forks.points, forks.s, forks.id, forks.count))
 		return 0;
 	Route_SetMarks(gGenLanes, base->marks);
 	length = Route_Length();
@@ -960,7 +1078,7 @@ int LevelGen_Build(const tLevelGen *gen, int levelIndex)
 	roadInfo = (tRoadInfo *)GetSortedPackEntry(kPackRoad, base.roadInfo, NULL);
 	if (!roadInfo)
 		return 0;
-	if (gen->crossings && !water) {	/* a free-form road that crosses itself */
+	if ((gen->crossings || gen->forks) && !water) {	/* a free-form road: crossings, forks */
 		if (!BuildRoute(gen, levelIndex, &base, roadInfo)) {
 			LevelGen_Dispose();
 			return 0;

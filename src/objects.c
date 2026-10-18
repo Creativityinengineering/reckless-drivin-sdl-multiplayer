@@ -450,6 +450,10 @@ int CalcBackCollision(t2DPoint pos)
 	return 0;
 }
 
+/* Set while the player goes off into the water (or a boat onto land):
+   the shield does not save him then. */
+int gNoShieldDeath;
+
 /* Set while a remote driver's replayed weapon destroys something here. */
 int gNoKillScore;
 
@@ -486,10 +490,11 @@ void KillObject(tObject *theObj)
 	if(theObj==gPlayerObj)
 	{
 		/* Shield crate: this crash costs nothing, and the next moment
-		   neither (still off the road, still in the jam). */
-		if(gCurPlayer->shieldGrace>0)
+		   neither (still off the road, still in the jam). Not into the
+		   water or a boat onto land (gNoShieldDeath). */
+		if(gCurPlayer->shieldGrace>0&&!gNoShieldDeath)
 			return;
-		if(gCurPlayer->shield&&!gCurPlayer->finishDelay&&!gCurPlayer->deathDelay)
+		if(gCurPlayer->shield&&!gNoShieldDeath&&!gCurPlayer->finishDelay&&!gCurPlayer->deathDelay)
 		{
 			tTextEffect fx={320,60,kEffectSmall+kEffectSinLines,0,"\x0b" "SHIELDhUSED"};
 			NewTextEffect(&fx);

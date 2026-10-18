@@ -409,6 +409,7 @@ void BurnObj(tObject *theObj)
 
 void Explosion(t2DPoint pos,t2DPoint velo,int offs,float mass,int sound);
 void FallDamage(tObject *theObj);
+extern int gNoShieldDeath;
 
 void ObjectPhysics(tObject *theObj)
 {
@@ -448,10 +449,19 @@ void ObjectPhysics(tObject *theObj)
 		else if(Network_NearestDriverDistance(theObj->pos.y)<kVisDist)
 		{
 			if(theObj->type->flags&kObjectBackCollFlag||theObj->type->flags2&kObjectSink&&(*gRoadInfo).deathOffs){
-				/* Offroad tyres crate: off the road is no crash for a while. */
+				/* Offroad tyres crate: off the road is no crash for a while,
+				   but they do not swim (water beside the road, boats). Off
+				   into the water or onto land as a boat the shield does not
+				   help either. */
+				int intoWater=(*gRoadInfo).water||
+					(theObj->type->flags2&kObjectSink&&(*gRoadInfo).deathOffs);
 				if(CalcBackCollision(theObj->pos)==2&&
-					!(theObj==gPlayerObj&&gCurPlayer->offroadTime>0&&!(*gRoadInfo).water))
-					KillObject(theObj);}
+					!(theObj==gPlayerObj&&gCurPlayer->offroadTime>0&&!intoWater))
+				{
+					gNoShieldDeath=intoWater;
+					KillObject(theObj);
+					gNoShieldDeath=0;
+				}}
 			else if(theObj->type->flags2&kObjectFrontCollFlag){
 				if(CalcBackCollision(theObj->pos)==0)
 					KillObject(theObj);}

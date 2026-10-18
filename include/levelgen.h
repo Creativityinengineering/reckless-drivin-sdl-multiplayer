@@ -14,6 +14,7 @@ typedef struct {
 	UInt8 landscape;	/* one of the original levels' worlds, 0..9 */
 	UInt8 length, curves, width, traffic, speed, cops, jumps, time;	/* 0..3 each */
 	UInt8 crossings;	/* 0..3: loops where the road crosses itself on a bridge */
+	UInt8 forks;	/* 0..3: side roads that leave the road and join it again */
 } tLevelGen;
 
 #define kLevelCodeSize 15	/* "XXXX-XXXX-XXXX" and the terminator */
@@ -36,7 +37,7 @@ UInt32 LevelGen_Pack(const tLevelGen *gen);	/* the settings without the seed */
 void LevelGen_Unpack(UInt32 packed, UInt32 seed, tLevelGen *gen);
 
 const char *LevelGen_LandscapeName(int landscape);
-const char *LevelGen_ChoiceName(int setting, int value);	/* setting: 0 length .. 7 time, 8 crossings */
+const char *LevelGen_ChoiceName(int setting, int value);	/* setting: 0 length .. 7 time, 8 crossings, 9 forks */
 
 /* Builds level number levelIndex of this generator into the game's level
    data (road, tracks, marks, objects). Returns 0 if it cannot. */

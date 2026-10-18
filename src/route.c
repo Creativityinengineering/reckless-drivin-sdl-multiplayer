@@ -12,6 +12,12 @@ int gRouteDrawPass = -1;
 
 static tRoutePoint *sPoints;
 static UInt8 *sDeck;
+/* Forks: side roads that leave the road and join it again. Their points,
+   how far along the main road each one counts, and which fork it is. */
+static tRoutePoint *sBranch;
+static float *sBranchS;
+static UInt8 *sBranchId;
+static int sBranchCount;
 static int sCount, sLanes, sMarks;
 static float sHalfWidth, sFinishS;
 
@@ -39,8 +45,15 @@ void Route_Dispose(void)
 	int layer;
 	free(sPoints);
 	free(sDeck);
+	free(sBranch);
+	free(sBranchS);
+	free(sBranchId);
 	sPoints = NULL;
 	sDeck = NULL;
+	sBranch = NULL;
+	sBranchS = NULL;
+	sBranchId = NULL;
+	sBranchCount = 0;
 	for (layer = 0; layer < 2; ++layer) {
 		free(sRowStart[layer]);
 		free(sRowCount[layer]);
@@ -106,12 +119,17 @@ t2DPoint Route_Heading(float s)
 	return P2D(sPoints[IndexAt(s)].hx, sPoints[IndexAt(s)].hy);
 }
 
-float Route_Nearest(t2DPoint pos, float hint)
+/* The nearest point of the road (main road or a fork) to pos: how far along
+   the road it counts and its squared distance; with hint >= 0 only near
+   the hint. */
+static float NearestS(t2DPoint pos, float hint, float *distance)
 {
 	int i, from = 0, to = sCount - 1, step = 1, best = 0;
-	float bestDistance = 1e30f;
-	if (!sCount)
+	float bestDistance = 1e30f, bestS;
+	if (!sCount) {
+		*distance = 1e30f;
 		return 0;
+	}
 	if (hint >= 0) {
 		from = IndexAt(hint) - 400;
 		to = IndexAt(hint) + 400;
@@ -142,7 +160,27 @@ float Route_Nearest(t2DPoint pos, float hint)
 			}
 		}
 	}
-	return best * kRouteStep;
+	bestS = best * kRouteStep;
+	for (i = 0; i < sBranchCount; i += step) {
+		float dx, dy, d;
+		if (hint >= 0 && fabsf(sBranchS[i] - hint) > 800)
+			continue;
+		dx = sBranch[i].x - pos.x;
+		dy = sBranch[i].y - pos.y;
+		d = dx * dx + dy * dy;
+		if (d < bestDistance) {
+			bestDistance = d;
+			bestS = sBranchS[i];
+		}
+	}
+	*distance = bestDistance;
+	return bestS;
+}
+
+float Route_Nearest(t2DPoint pos, float hint)
+{
+	float distance;
+	return NearestS(pos, hint, &distance);
 }
 
 int Route_RowSpans(int row, int layer, const SInt16 **spans)
@@ -284,53 +322,68 @@ static int QuadAt(const float *qx, const float *qy, float y, float *left, float 
 	return hits >= 2;
 }
 
+static int AddSegment(const tRoutePoint *a, const tRoutePoint *b, int rows,
+	tPiece **pieces, size_t *count, size_t *capacity)
+{
+	float qx[4], qy[4], low, high, y;
+	int row0, row1, row;
+	qx[0] = a->x - a->hy * sHalfWidth; qy[0] = a->y + a->hx * sHalfWidth;
+	qx[1] = a->x + a->hy * sHalfWidth; qy[1] = a->y - a->hx * sHalfWidth;
+	qx[2] = b->x + b->hy * sHalfWidth; qy[2] = b->y - b->hx * sHalfWidth;
+	qx[3] = b->x - b->hy * sHalfWidth; qy[3] = b->y + b->hx * sHalfWidth;
+	low = high = qy[0];
+	for (row = 1; row < 4; ++row) {
+		if (qy[row] < low) low = qy[row];
+		if (qy[row] > high) high = qy[row];
+	}
+	row0 = (int)floorf(low / 2);
+	row1 = (int)ceilf(high / 2);
+	for (row = row0; row <= row1; ++row) {
+		float left, right;
+		if (row < 0 || row >= rows)
+			continue;
+		y = row * 2.0f + 1;
+		if (y < low)
+			y = low;
+		if (y > high)
+			y = high;
+		if (!QuadAt(qx, qy, y, &left, &right))
+			continue;
+		if (*count == *capacity) {
+			tPiece *grown;
+			*capacity = *capacity ? *capacity * 2 : 65536;
+			grown = (tPiece *)realloc(*pieces, *capacity * sizeof(tPiece));
+			if (!grown)
+				return 0;
+			*pieces = grown;
+		}
+		(*pieces)[*count].row = row;
+		(*pieces)[*count].left = (SInt16)floorf(left - 1);
+		(*pieces)[*count].right = (SInt16)ceilf(right + 1);
+		(*count)++;
+	}
+	return 1;
+}
+
 static int BuildLayer(int layer, int rows)
 {
 	tPiece *pieces = NULL;
 	size_t count = 0, capacity = 0, i;
 	int k, out = 0;
 	for (k = 0; k + 1 < sCount; ++k) {
-		const tRoutePoint *a = &sPoints[k], *b = &sPoints[k + 1];
-		float qx[4], qy[4], low, high, y;
-		int row0, row1, row;
 		if ((sDeck[k] != 0) != (layer == 1))
 			continue;
-		qx[0] = a->x - a->hy * sHalfWidth; qy[0] = a->y + a->hx * sHalfWidth;
-		qx[1] = a->x + a->hy * sHalfWidth; qy[1] = a->y - a->hx * sHalfWidth;
-		qx[2] = b->x + b->hy * sHalfWidth; qy[2] = b->y - b->hx * sHalfWidth;
-		qx[3] = b->x - b->hy * sHalfWidth; qy[3] = b->y + b->hx * sHalfWidth;
-		low = high = qy[0];
-		for (row = 1; row < 4; ++row) {
-			if (qy[row] < low) low = qy[row];
-			if (qy[row] > high) high = qy[row];
+		if (!AddSegment(&sPoints[k], &sPoints[k + 1], rows, &pieces, &count, &capacity)) {
+			free(pieces);
+			return 0;
 		}
-		row0 = (int)floorf(low / 2);
-		row1 = (int)ceilf(high / 2);
-		for (row = row0; row <= row1; ++row) {
-			float left, right;
-			if (row < 0 || row >= rows)
-				continue;
-			y = row * 2.0f + 1;
-			if (y < low)
-				y = low;
-			if (y > high)
-				y = high;
-			if (!QuadAt(qx, qy, y, &left, &right))
-				continue;
-			if (count == capacity) {
-				tPiece *grown;
-				capacity = capacity ? capacity * 2 : 65536;
-				grown = (tPiece *)realloc(pieces, capacity * sizeof(tPiece));
-				if (!grown) {
-					free(pieces);
-					return 0;
-				}
-				pieces = grown;
-			}
-			pieces[count].row = row;
-			pieces[count].left = (SInt16)floorf(left - 1);
-			pieces[count].right = (SInt16)ceilf(right + 1);
-			count++;
+	}
+	for (k = 0; layer == 0 && k + 1 < sBranchCount; ++k) {	/* forks: on the ground */
+		if (sBranchId[k] != sBranchId[k + 1])
+			continue;
+		if (!AddSegment(&sBranch[k], &sBranch[k + 1], rows, &pieces, &count, &capacity)) {
+			free(pieces);
+			return 0;
 		}
 	}
 	qsort(pieces, count, sizeof(tPiece), ComparePieces);
@@ -363,7 +416,8 @@ static int BuildLayer(int layer, int rows)
 	return 1;
 }
 
-int Route_Setup(tRoutePoint *points, int count, float halfWidth, UInt8 *deck, float finishS)
+int Route_Setup(tRoutePoint *points, int count, float halfWidth, UInt8 *deck, float finishS,
+	tRoutePoint *branch, float *branchS, UInt8 *branchId, int branchCount)
 {
 	float maxY = 0;
 	int i;
@@ -371,8 +425,18 @@ int Route_Setup(tRoutePoint *points, int count, float halfWidth, UInt8 *deck, fl
 	if (!points || !deck || count < 2) {
 		free(points);
 		free(deck);
+		free(branch);
+		free(branchS);
+		free(branchId);
 		return 0;
 	}
+	sBranch = branch;
+	sBranchS = branchS;
+	sBranchId = branchId;
+	sBranchCount = branch && branchS && branchId ? branchCount : 0;
+	for (i = 0; i < sBranchCount; ++i)
+		if (branch[i].y > maxY)
+			maxY = branch[i].y;
 	sPoints = points;
 	sDeck = deck;
 	sCount = count;
@@ -492,8 +556,14 @@ static void DrawDashes(int onDeck, float xDrawStart, float yDrawStart, float zoo
 
 void Route_DrawMarks(float xDrawStart, float yDrawStart, float zoom)
 {
-	if (gRouteActive)
-		DrawDashes(0, xDrawStart, yDrawStart, zoom);
+	int i;
+	if (!gRouteActive)
+		return;
+	DrawDashes(0, xDrawStart, yDrawStart, zoom);
+	for (i = 0; sMarks && i < sBranchCount; ++i)	/* the forks' middle lines */
+		if (i % 60 < 25 && InView(sBranch[i].x, sBranch[i].y, xDrawStart, yDrawStart, zoom, 100))
+			BlendRect(sBranch[i].x - 2.2f, sBranch[i].y - 2.2f, sBranch[i].x + 2.2f, sBranch[i].y + 2.2f,
+				xDrawStart, yDrawStart, zoom, PixelRGB(232, 232, 222), 255);
 }
 
 void DrawRouteDeck16(float xDrawStart, float yDrawStart, float zoom);	/* roaddraw.c */
@@ -594,9 +664,18 @@ void Route_TrackObject(void *object)
 	tObject *obj = (tObject *)object;
 	if (!gRouteActive || !obj)
 		return;
-	obj->routeS = Route_Nearest(obj->pos, obj->routeS > 0 ? obj->routeS : -1);
-	if (obj->routeS <= 0)
-		obj->routeS = 0.01f;
+	{
+		float localDistance, globalDistance, local, global;
+		local = NearestS(obj->pos, obj->routeS > 0 ? obj->routeS : -1, &localDistance);
+		/* cut across (offroad tyres, a jump): clearly on another stretch
+		   of the road now, not just beside the own one */
+		if (obj->routeS > 0 && localDistance > sHalfWidth * sHalfWidth * 2.25f) {
+			global = NearestS(obj->pos, -1, &globalDistance);
+			if (globalDistance * 2 < localDistance)
+				local = global;
+		}
+		obj->routeS = local > 0 ? local : 0.01f;
+	}
 }
 
 /* Traffic tracks of a free-form road have a point every kRouteTrackGap of
@@ -765,4 +844,14 @@ int Route_WallBelow(void *object)
 		return 1;
 	}
 	return 0;
+}
+
+/* Where the i-th fork leaves the road, along it (-1: none). */
+float Route_ForkS(int index)
+{
+	int i, fork = -1;
+	for (i = 0; i < sBranchCount; ++i)
+		if ((i == 0 || sBranchId[i] != sBranchId[i - 1]) && ++fork == index)
+			return sBranchS[i];
+	return -1;
 }

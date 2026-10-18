@@ -711,25 +711,25 @@ static void StepStartLevel(int step)
    generator: a seed and track settings, written as a level code that gives
    the same level again on any computer. ---- */
 #define kLevelRowY 66
-#define kLevelRowH 18
+#define kLevelRowH 17
 #define kPreviewX 92
-#define kPreviewY 340
+#define kPreviewY 342
 #define kPreviewW 456
-#define kPreviewH 58
+#define kPreviewH 54
 enum {
 	kLevelRowSource, kLevelRowFirstSetting,	/* landscape, then 8 settings */
-	kLevelRowSeed = kLevelRowFirstSetting + 10, kLevelRowCode, kLevelRowSave,
+	kLevelRowSeed = kLevelRowFirstSetting + 11, kLevelRowCode, kLevelRowSave,
 	kLevelRowSaved, kLevelRowCount
 };
-static const char *const kSettingLabels[9] = {
+static const char *const kSettingLabels[10] = {
 	"LENGTH", "CURVES", "ROAD", "TRAFFIC", "TRAFFIC SPEED", "POLICE", "JUMPS", "TIME LIMIT",
-	"CROSSINGS"
+	"CROSSINGS", "FORKS"
 };
 
 static UInt8 *GenSetting(tLevelGen *gen, int setting)
 {
-	UInt8 *values[9] = {&gen->length, &gen->curves, &gen->width, &gen->traffic,
-		&gen->speed, &gen->cops, &gen->jumps, &gen->time, &gen->crossings};
+	UInt8 *values[10] = {&gen->length, &gen->curves, &gen->width, &gen->traffic,
+		&gen->speed, &gen->cops, &gen->jumps, &gen->time, &gen->crossings, &gen->forks};
 	return values[setting];
 }
 
@@ -746,7 +746,7 @@ static void DrawTrackPreview(tPixel *fb, int stride)
 	};
 	float low = 1e9f, high = -1e9f, scale;
 	int column, i, water = gLevelGen.landscape == 4;
-	if (gLevelGen.crossings && !water) {
+	if ((gLevelGen.crossings || gLevelGen.forks) && !water) {
 		/* a free-form road: its real shape, loops and bridges, turned
 		   sideways (start left, finish right) */
 		static float xs[900], ys[900];
