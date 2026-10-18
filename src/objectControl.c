@@ -189,7 +189,7 @@ void ObjectFollow(tObject *theObj,tTrackInfoSeg *target,tInputData *input)
 	}
 	/* Generated multi-lane road: each car keeps to its own lane beside the
 	   track (not an overtaking offset: no extra speed). */
-	if(!offs&&gGenLanes>1&&theObj->type->flags&kObjectWheelFlag&&!(theObj->type->flags&kObjectCop)&&
+	if(!offs&&gGenLanes>1&&!theObj->ownTrack&&theObj->type->flags&kObjectWheelFlag&&!(theObj->type->flags&kObjectCop)&&
 		!Network_IsDriverObject(theObj)&&theObj!=gPlayerObj&&
 		(theObj->control==kObjectDriveUp||theObj->control==kObjectDriveDown))
 	{
@@ -428,9 +428,232 @@ void ObjectCrossRoad(tObject *theObj,tInputData *input)
 	ObjectFollow(theObj,&target,input);
 }
 
+/* Highway traffic on its own track: follows it on its lane (obj->lane),
+   faster than the road's traffic; at the end of the highway it comes back
+   at the start, out of every driver's sight. */
+/* A highway car's lane: across the carriageway, to the right of its track. */
+#define kHighwayLane 84.0f
+
+static float HighwayLaneOffset(int lane)
+{
+	return ((lane&3)-1)*kHighwayLane;
+}
+
+/* The nearest car ahead of theObj in the given lane of its carriageway
+   (heading hx,hy): how far ahead and how fast; 0 if none within range. */
+/* The nearest car in a lane of the carriageway, between from and to
+   along the way (negative: behind). A car changing into the lane already
+   counts as in it (it has signalled). myLat: how far right of the track
+   this car is. */
+static int CarInLane(const tObject *theObj,float hx,float hy,float myLat,int lane,float from,float to,float *dist,float *speed)
+{
+	tObject *other=(tObject*)gFirstObj->next;
+	float wanted=HighwayLaneOffset(lane),best=1e9f,range=fabsf(from)>fabsf(to)?fabsf(from):fabsf(to);
+	int found=0;
+	for(;other!=gFirstObj;other=(tObject*)other->next)
+	{
+		float dx,dy,along,lat,off;
+		if(other==theObj||!(other->type->flags&kObjectWheelFlag))	/* (drives over ramps and crates) */
+			continue;
+		dx=other->pos.x-theObj->pos.x;
+		dy=other->pos.y-theObj->pos.y;
+		if(dx>range+60||dx<-range-60||dy>range+60||dy<-range-60)
+			continue;
+		along=dx*hx+dy*hy;
+		if(along<from||along>to||fabsf(along)>=best)
+			continue;
+		if(!Route_SameLevel(theObj,other))	/* on a bridge over it, or below */
+			continue;
+		lat=myLat+dx*hy-dy*hx;
+		off=fabsf(lat-wanted);
+		if(off>44&&!(other->ownTrack==theObj->ownTrack&&(other->lane&3)==lane&&off<110))
+			continue;
+		best=fabsf(along);
+		*dist=best;
+		*speed=other->velo.x*hx+other->velo.y*hy;
+		found=1;
+	}
+	return found;
+}
+
+/* A highway car comes out of the tunnel at the track's start, in a lane
+   that is free there; 0 if all are taken. */
+static int OwnTrackRestart(tObject *theObj,tTrackInfo *track)
+{
+	float dir=atan2f((float)(track->track[1].x-track->track[0].x),(float)(track->track[1].y-track->track[0].y));
+	float hx=sinf(dir),hy=cosf(dir);
+	int k;
+	for(k=0;k<3;++k)
+	{
+		int lane=((theObj->lane&3)+k)%3;
+		float lateral=HighwayLaneOffset(lane);
+		t2DPoint at=P2D(track->track[0].x+hy*lateral,track->track[0].y-hx*lateral);
+		tObject *other=(tObject*)gFirstObj->next;
+		int taken=0;
+		for(;other!=gFirstObj&&!taken;other=(tObject*)other->next)
+			if(other!=theObj&&other->type->flags&(kObjectWheelFlag|kObjectBounce))
+			{
+				/* the lane free a good way ahead (no queue to run into) */
+				float dx=other->pos.x-at.x,dy=other->pos.y-at.y,along=dx*hx+dy*hy,across=dx*hy-dy*hx;
+				if(along>-80&&along<350&&fabsf(across)<50)
+					taken=1;
+			}
+		if(taken)
+			continue;
+		theObj->lane=(SInt8)lane;
+		theObj->pos=at;
+		theObj->dir=dir;
+		theObj->rotVelo=0;
+		theObj->damage=0;
+		theObj->stuckSince=0;
+		theObj->laneLatSet=0;
+		theObj->jumpHeight=0;
+		theObj->jumpVelo=0;
+		theObj->velo=VEC2D_Scale(P2D(hx,hy),track->track[0].velo*0.8f);
+		theObj->target=1;
+		return 1;
+	}
+	return 0;
+}
+
+/* Highway traffic on its own track: its own driving, lane-disciplined. It
+   only brakes for what is in its own lane, changes lanes round a stopped
+   or slow car, and never pulls out the way country road traffic does. At
+   the highway's ends it goes into the tunnel and comes out of the other
+   one. */
+static void OwnTrackFollow(tObject *theObj,tInputData *input)
+{
+	tTrackInfo *track=(tTrackInfo*)theObj->ownTrack;
+	float tx,ty,length,hx,hy,lateral,velo,wanted,ahead,aheadSpeed,myLat;
+	int ramp;
+	t2DPoint target,objDir,diff;
+	int i=theObj->target;
+	if(i<1)i=1;
+	if(i>=(int)track->num)i=track->num-1;
+	tx=(float)(track->track[i].x-track->track[i-1].x);
+	ty=(float)(track->track[i].y-track->track[i-1].y);
+	length=sqrtf(tx*tx+ty*ty);
+	if(length<1)length=1;
+	hx=tx/length;
+	hy=ty/length;
+	if(((theObj->pos.x-track->track[i].x)*tx+(theObj->pos.y-track->track[i].y)*ty)/length>-40)
+	{
+		theObj->target=++i;
+		Route_HighwayCarAt(theObj,i);
+		if(!theObj->ownTrack)	/* turned off onto the road */
+			return;
+		if(i>=(int)track->num&&Route_OwnTrackEnd(theObj))	/* off a ramp */
+			return;
+		if(i>=(int)track->num&&Route_HighwayFull(track))
+		{
+			/* too busy: it does not come out again (out of the way, it is
+			   cleared away like a wreck nobody sees) */
+			theObj->control=kObjectNoInput;
+			theObj->velo=P2D(0,0);
+			theObj->pos=P2D(-1e5f,-1e5f);
+			return;
+		}
+		if(i>=(int)track->num)
+		{
+			/* in the tunnel at the end: out of the one at the start */
+			if(!OwnTrackRestart(theObj,track))
+				theObj->target=track->num-1;	/* (the way out is full: waits in the dark) */
+			return;
+		}
+	}
+	/* stuck for a while where nobody sees it: on again from the tunnel */
+	if(VEC2D_Value(theObj->velo)<3)
+	{
+		if(!theObj->stuckSince)
+			theObj->stuckSince=gFrameCount;
+		else if(gFrameCount-theObj->stuckSince>4*60&&Network_NearestDriverDistance2D(theObj->pos)>800&&
+			OwnTrackRestart(theObj,track))
+			return;
+	}
+	else
+		theObj->stuckSince=0;
+	velo=theObj->velo.x*hx+theObj->velo.y*hy;
+	myLat=(theObj->pos.x-track->track[i].x)*hy-(theObj->pos.y-track->track[i].y)*hx;
+	if(!theObj->laneLatSet)
+	{
+		theObj->laneLat=myLat;
+		theObj->laneLatSet=1;
+	}
+	ramp=Route_IsRamp(track);
+	if(ramp)
+		theObj->lane=1;	/* one lane */
+	wanted=track->track[i].velo*(ramp?1:1.05f-0.1f*(theObj->lane&3));	/* the left lane fastest */
+	/* something slower ahead in the lane: another lane if there is room
+	   ahead and behind (more behind for a faster car coming), else keep a
+	   distance that grows with the speed */
+	if(CarInLane(theObj,hx,hy,myLat,theObj->lane&3,0,480,&ahead,&aheadSpeed)&&aheadSpeed<wanted-2)
+	{
+		float gap=80+(velo>0?velo:0)*3.5f;
+		int side,changed=0;
+		int settled=fabsf(theObj->laneLat-HighwayLaneOffset(theObj->lane))<4;
+		if(ahead<gap+260&&settled&&theObj->laneUntil<gFrameCount&&!ramp)
+			for(side=-1;side<=1&&!changed;side+=2)
+			{
+				int lane=(theObj->lane&3)+side;
+				float d,sp;
+				if(lane<0||lane>2)
+					continue;
+				if(CarInLane(theObj,hx,hy,myLat,lane,0,gap+160,&d,&sp)&&(sp<wanted-2||d<130))
+					continue;	/* slow or close ahead there */
+				if(CarInLane(theObj,hx,hy,myLat,lane,-400,0,&d,&sp)&&
+					d<130+(sp>velo?(sp-velo)*7:0))
+					continue;	/* someone beside or coming up behind */
+				theObj->lane=(SInt8)lane;
+				theObj->laneUntil=gFrameCount+150;
+				changed=1;
+			}
+		if(!changed)
+		{
+			float follow=aheadSpeed+(ahead-gap)*0.12f;
+			if(ahead<70)
+				follow=0;
+			if(follow<wanted)
+				wanted=follow<0?0:follow;
+		}
+	}
+	/* across to the lane smoothly (a lane change takes about a second) */
+	{
+		float to=HighwayLaneOffset(theObj->lane),step=1.4f;
+		if(theObj->laneLat<to-step)theObj->laneLat+=step;
+		else if(theObj->laneLat>to+step)theObj->laneLat-=step;
+		else theObj->laneLat=to;
+	}
+	lateral=theObj->laneLat;
+	target=P2D(track->track[i].x+hy*lateral,track->track[i].y-hx*lateral);
+	/* steer for a point ahead on the lane */
+	{
+		float look=70+(velo>0?velo:0)*2.5f;
+		target=VEC2D_Sum(target,P2D(hx*look,hy*look));
+	}
+	objDir=P2D(sin(theObj->dir+theObj->rotVelo*kPreSteerTime),cos(theObj->dir+theObj->rotVelo*kPreSteerTime));
+	diff=VEC2D_Difference(target,theObj->pos);
+	{
+		float dist=VEC2D_Value(diff);
+		input->steering=(-VEC2D_CrossProduct(objDir,diff)/(dist>100?dist:100))*kControlSteering;
+	}
+	input->throttle=velo<wanted?1:0;
+	input->brake=velo>wanted+2?(velo>wanted+8?1:0.3f):0;
+	if(input->brake)input->throttle=0;
+	input->handbrake=0;
+	input->reverse=0;
+}
+
 void ObjectControl(tObject *theObj,tInputData *input)
 {
-	CheckTarget(theObj);
+	int ownTrack=theObj->ownTrack&&theObj->control==kObjectDriveUp&&gRouteActive,waitToCross=0;
+	float before=theObj->routeS;
+	if(!ownTrack)
+		CheckTarget(theObj);
+	/* a road car at a highway junction: stays on the highway or not */
+	if(!ownTrack&&gRouteActive&&theObj!=gPlayerObj&&!theObj->replica&&
+		(theObj->control==kObjectDriveUp||theObj->control==kObjectDriveDown)&&before>0)
+		waitToCross=Route_RoadCarAt(theObj,before);
+	ownTrack=theObj->ownTrack&&theObj->control==kObjectDriveUp&&gRouteActive;
 	if(theObj==gPlayerObj)
 	{
 		theObj->input=*input;
@@ -450,10 +673,18 @@ void ObjectControl(tObject *theObj,tInputData *input)
 				theObj->input.brake=0;theObj->input.throttle=0;theObj->input.steering=0;
 				break;
 			case kObjectDriveUp:			
-				ObjectFollow(theObj,&gTrackUp->track[theObj->target],&theObj->input);
+				if(ownTrack)
+					OwnTrackFollow(theObj,&theObj->input);
+				else
+					ObjectFollow(theObj,&gTrackUp->track[theObj->target],&theObj->input);
 				break;
 			case kObjectDriveDown:
 				ObjectFollow(theObj,&gTrackDown->track[theObj->target],&theObj->input);
+				if(waitToCross)	/* at a highway junction: lets the highway traffic pass */
+				{
+					theObj->input.throttle=0;
+					theObj->input.brake=1;
+				}
 				break;
 			case kObjectCrossRoad:
 				ObjectCrossRoad(theObj,&theObj->input);

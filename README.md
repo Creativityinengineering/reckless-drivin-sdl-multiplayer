@@ -257,6 +257,7 @@ to finish (red), with its bridges.
 | **Time limit** | Relaxed, Normal, Tight, Brutal |
 | **Crossings** | None, One, Two, Three: the road loops round (to the right or the left) and crosses itself on a bridge |
 | **Forks** | None, One, Two, Three: a side road leaves the road and joins it again; both ways are drivable |
+| **Highways** | None, One, Two, Three: the country road merges onto a highway from the right (two carriageways, three lanes each, running north, east or west) and leaves it again to the right; the other direction of the road has its own ramps over both carriageways; the highway ends in tunnels, has its own faster traffic in both directions that keeps to its lanes, and goes over the road on a bridge where it crosses it elsewhere; green signs show the way to the finish |
 | **Seed** | Any number (type the digits, **R** for a random one) |
 
 **Level codes.** The seed and all settings together make a level code such as
@@ -291,6 +292,26 @@ packages and animals follow the road, places and the finish count the
 distance along it, and the camera looks ahead the way the road goes. Only
 generated levels with crossings use this; the original levels and generated
 levels without crossings run exactly as before. Not on the river (boats).
+
+<p align="center">
+  <img src="screenshots/highway-flyover.jpg" width="49%" alt="A generated highway interchange: a ramp loops round and crosses both carriageways on a bridge while trucks and cars pass underneath">
+  <img src="screenshots/highway-interchange.jpg" width="49%" alt="The ramp bridge over the highway next to the exit, with traffic on the highway and the slip road">
+  <br>
+  <em>Highways: the road's other direction crosses the highway on its own ramp bridge</em>
+</p>
+
+**Highways.** A highway is two carriageways with three lanes each and a
+median, ending in tunnels at both ends. The country road joins it from the
+right and leaves it to the right; a road with traffic both ways never runs
+straight into a one-way carriageway: its other direction gets its own ramps,
+off the far carriageway to the right, round and over both carriageways on a
+bridge, and from the road over the highway and round onto the far
+carriageway from the right. Highway traffic keeps to its lanes (the left one
+is the fastest), changes lanes only where there is room ahead and behind,
+keeps its distance at speed, and leaves only from the right lane; road
+traffic that joins the highway drives the same way. Wrecks out of sight are
+cleared away and new cars come out of the tunnels, so the traffic keeps
+flowing. Drivers can take any ramp, the wrong way too.
 
 ## Quick Start
 

@@ -174,7 +174,7 @@ static t2DPoint GetUniqueRoutePos(SInt16 minOffs,SInt16 maxOffs,float *objDir,in
 		{
 			int up=RanProb(0.5),i;
 			float sqdist;
-			Route_Point(s,(up?1:-1)*hw*(gGenLanes>1?0.5f:0.45f),&pos,&heading);
+			Route_Point(s,Route_TrafficOffset(s,up),&pos,&heading);
 			*dir=up?kObjectDriveUp:kObjectDriveDown;
 			GetCloseObj(pos,nil,&sqdist);
 			ok=(sqdist>kScale*kScale*kMinCarDist*kMinCarDist)&&!Route_BackCollision(pos,0);

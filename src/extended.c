@@ -302,7 +302,8 @@ void Extended_Panic(tObject *car)
 		car->panicUntil=gFrameCount+(wild?kWildPanicFrames:kPanicFrames);
 		car->recklessUntil=car->panicUntil+(wild?kWildRecklessFrames:kRecklessFrames);
 	}
-	if(RanProb(Network_HasAggressiveCops()?kWildTurnRoundChance:kTurnRoundChance))
+	/* (not on a highway: there nobody turns round) */
+	if(!Route_OnHighway(car)&&RanProb(Network_HasAggressiveCops()?kWildTurnRoundChance:kTurnRoundChance))
 	{
 		/* Turn round: steer hard until facing the other way (see
 		   Extended_PanicTurn), then flee in the opposite direction. */

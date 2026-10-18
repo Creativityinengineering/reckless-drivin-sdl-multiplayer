@@ -3,6 +3,7 @@
 #include "roads.h"
 #include "packs.h"
 #include "route.h"
+#include "random.h"
 #include <SDL.h>
 #include <math.h>
 #include <stdio.h>
@@ -11,7 +12,7 @@
 
 /* ---- Settings ---- */
 
-tLevelGen gLevelGen = {12345, 0, 1, 1, 1, 2, 1, 1, 1, 1, 0, 0};
+tLevelGen gLevelGen = {12345, 0, 1, 1, 1, 2, 1, 1, 1, 1, 0, 0, 0};
 int gLevelGenOn;
 static tLevelGen sSaved[kMaxSavedLevels];
 static int sSavedCount;
@@ -21,7 +22,7 @@ static const char *const kLandscapes[kGenLandscapes] = {
 	"HARBOUR", "ICE ROAD", "NIGHT DRIVE", "MOUNTAIN PASS", "GAUNTLET"
 };
 
-static const char *const kChoices[10][kGenChoices] = {
+static const char *const kChoices[11][kGenChoices] = {
 	{"SHORT", "NORMAL", "LONG", "MARATHON"},	/* length */
 	{"STRAIGHT", "GENTLE", "TWISTY", "CRAZY"},	/* curves */
 	{"NARROW", "NORMAL", "2 LANES", "3 LANES"},	/* road width: lanes per direction */
@@ -31,7 +32,8 @@ static const char *const kChoices[10][kGenChoices] = {
 	{"NONE", "SOME", "MANY", "LOTS"},	/* jumps */
 	{"RELAXED", "NORMAL", "TIGHT", "BRUTAL"},	/* time limit */
 	{"NONE", "ONE", "TWO", "THREE"},	/* crossings: loops over a bridge */
-	{"NONE", "ONE", "TWO", "THREE"}	/* forks: side roads */
+	{"NONE", "ONE", "TWO", "THREE"},	/* forks: side roads */
+	{"NONE", "ONE", "TWO", "THREE"}	/* highways */
 };
 
 const char *LevelGen_LandscapeName(int landscape)
@@ -41,7 +43,7 @@ const char *LevelGen_LandscapeName(int landscape)
 
 const char *LevelGen_ChoiceName(int setting, int value)
 {
-	if (setting < 0 || setting >= 10 || value < 0 || value >= kGenChoices)
+	if (setting < 0 || setting >= 11 || value < 0 || value >= kGenChoices)
 		return "?";
 	return kChoices[setting][value];
 }
@@ -57,7 +59,7 @@ UInt32 LevelGen_Pack(const tLevelGen *gen)
 		(UInt32)(gen->traffic & 3) << 10 | (UInt32)(gen->speed & 3) << 12 |
 		(UInt32)(gen->cops & 3) << 14 | (UInt32)(gen->jumps & 3) << 16 |
 		(UInt32)(gen->time & 3) << 18 | (UInt32)(gen->crossings & 3) << 20 |
-		(UInt32)(gen->forks & 3) << 22;
+		(UInt32)(gen->forks & 3) << 22 | (UInt32)(gen->highways & 3) << 24;
 }
 
 void LevelGen_Unpack(UInt32 packed, UInt32 seed, tLevelGen *gen)
@@ -76,6 +78,7 @@ void LevelGen_Unpack(UInt32 packed, UInt32 seed, tLevelGen *gen)
 	gen->time = (UInt8)(packed >> 18 & 3);
 	gen->crossings = (UInt8)(packed >> 20 & 3);
 	gen->forks = (UInt8)(packed >> 22 & 3);
+	gen->highways = (UInt8)(packed >> 24 & 3);
 }
 
 static UInt8 CodeCheck(UInt64 bits)
@@ -94,7 +97,8 @@ static UInt8 CrossingsCheck(UInt64 bits, int extra)
 void LevelGen_Encode(const tLevelGen *gen, char code[kLevelCodeSize])
 {
 	UInt64 bits = (UInt64)(LevelGen_Pack(gen) & 0xFFFFF) << 32 | gen->seed;	/* 52 bits */
-	UInt64 all = bits << 8 | CrossingsCheck(bits, (gen->crossings & 3) + 4 * (gen->forks & 3));	/* 60 bits: 12 letters */
+	UInt64 all = bits << 8 | CrossingsCheck(bits, (gen->crossings & 3) + 4 * (gen->forks & 3) +
+		16 * (gen->highways & 3));	/* 60 bits: 12 letters */
 	int i, out = 0;
 	for (i = 0; i < 12; ++i) {
 		if (i == 4 || i == 8)
@@ -128,10 +132,10 @@ int LevelGen_Decode(const char *code, tLevelGen *gen)
 		return 0;
 	{
 		int extra;
-		for (extra = 0; extra < 16; ++extra)
+		for (extra = 0; extra < 64; ++extra)
 			if (CrossingsCheck(bits, extra) == (UInt8)(all & 255)) {
 				LevelGen_Unpack((UInt32)(bits >> 32) | (UInt32)(extra & 3) << 20 |
-					(UInt32)(extra >> 2) << 22, (UInt32)bits, gen);
+					(UInt32)(extra >> 2 & 3) << 22 | (UInt32)(extra >> 4) << 24, (UInt32)bits, gen);
 				return 1;
 			}
 	}
@@ -176,10 +180,17 @@ void LevelGen_LoadSettings(void)
 
 void LevelGen_SaveSettings(void)
 {
+	/* written to a new file that then replaces the old one: never left
+	   half written */
 	const char *path = SettingsPath();
-	FILE *file = path ? fopen(path, "w") : NULL;
+	char temp[1024];
+	FILE *file;
 	char code[kLevelCodeSize];
 	int i;
+	if (!path)
+		return;
+	snprintf(temp, sizeof(temp), "%s.new", path);
+	file = fopen(temp, "w");
 	if (!file)
 		return;
 	fprintf(file, "on=%d\n", gLevelGenOn);
@@ -189,7 +200,10 @@ void LevelGen_SaveSettings(void)
 		LevelGen_Encode(&sSaved[i], code);
 		fprintf(file, "saved=%s\n", code);
 	}
-	fclose(file);
+	if (fclose(file) == 0)
+		rename(temp, path);
+	else
+		remove(temp);
 }
 
 int LevelGen_SavedCount(void)
@@ -260,6 +274,10 @@ static tMarkSeg *sMarks;
 static float *sSlope;
 static int sLoaded;
 int gGenLanes;
+static tTrackInfo *sHighTracks[8];	/* the highways' own traffic tracks */
+static tTrackInfo *sRampTracks[8];	/* their ramps' tracks */
+static int sRampTrackCount;
+static int sHighTrackCount;
 static float sBridges[16];
 static int sBridgeCount;
 
@@ -290,6 +308,10 @@ void LevelGen_Dispose(void)
 	sLoaded = 0;
 	gGenLanes = 0;
 	sBridgeCount = 0;
+	while (sHighTrackCount > 0)
+		free(sHighTracks[--sHighTrackCount]);
+	while (sRampTrackCount > 0)
+		free(sRampTracks[--sRampTrackCount]);
 	Route_Dispose();
 }
 
@@ -616,6 +638,8 @@ typedef struct {
 	UInt8 *deck;
 	int count, capacity;
 	float x, y, hx, hy, theta;	/* theta: heading angle for the bend limits */
+	int highways;	/* stretches on a highway: from the junction (s0) to the exit (s1) */
+	float highS0[4], highS1[4], highPhi[4];	/* phi: the highway's heading angle */
 } tPath;
 
 static int PathPush(tPath *path)
@@ -735,12 +759,38 @@ static int PathLoop(tPath *path, float hw, float minRadius)
 	if (!PathStraight(path, back))
 		return 0;
 	for (i = from; i < path->count; ++i)	/* the bridge over the road below */
-		if (Abs(path->points[i].x - x0) < hw + 80)
+		if (Abs(path->points[i].x - x0) < hw + 200)	/* over the road and its verges */
 			path->deck[i] = 1;
 	if (!PathArc(path, quarter, radius))
 		return 0;
 	PathSnap(path, 0, 1, 0);
 	return PathStraight(path, south + radius + hw + 400);
+}
+
+/* A highway stretch: the road swings out to the right, merges onto the
+   highway's carriageway from the right (heading north), follows it, and
+   leaves it to the right again. The highway itself (both carriageways,
+   reaching on beyond the junctions) is built from these stretches. */
+static int PathHighway(tPath *path, float minRadius)
+{
+	static const float kPhi[3] = {0, 1.5707963f, -1.5707963f};	/* north, east, west */
+	float radius = minRadius > 900 ? minRadius : 900, phi = kPhi[RndI(0, 2)];
+	/* in from the right: first heading a little to the left of it */
+	if (Abs(path->theta - (phi - 0.45f)) > 0.01f && !PathArc(path, phi - 0.45f - path->theta, radius))
+		return 0;
+	/* (long enough away from the highway for the other direction's ramp) */
+	if (!PathStraight(path, 1500) || !PathArc(path, 0.45f, radius))
+		return 0;
+	PathSnap(path, sinf(phi), cosf(phi), phi);
+	path->highS0[path->highways] = (path->count - 1) * kRouteStep;
+	path->highPhi[path->highways] = phi;
+	if (!PathStraight(path, RndF(3500, 6000)))
+		return 0;
+	path->highS1[path->highways] = (path->count - 1) * kRouteStep;
+	path->highways++;
+	if (!PathArc(path, 0.45f, radius))	/* and out to the right */
+		return 0;
+	return PathStraight(path, 1500);
 }
 
 /* The whole free-form road; returns the point count (0: failed). */
@@ -750,7 +800,7 @@ static int GenerateRoute(const tLevelGen *gen, int levelIndex, tPath *path, floa
 	static const float kMaxTheta[4] = {0.25f, 0.8f, 1.05f, 1.2f};
 	float total = kLength[gen->length & 3], hw = RouteHalfWidth(gen);
 	float minRadius = kMinRadius[gen->curves & 3], maxTheta = kMaxTheta[gen->curves & 3];
-	int crossings = gen->crossings & 3, done = 0;
+	int crossings = gen->crossings & 3, done = 0, highways = gen->highways & 3, highDone = 0;
 	memset(path, 0, sizeof(*path));
 	path->hy = 1;
 	SeedRandom(gen, levelIndex);
@@ -762,6 +812,12 @@ static int GenerateRoute(const tLevelGen *gen, int levelIndex, tPath *path, floa
 			if (!PathLoop(path, hw, minRadius))
 				goto failed;
 			done++;
+			continue;
+		}
+		if (highDone < highways && s >= total * (2 * highDone + 1) / (2 * highways + 1)) {
+			if (!PathHighway(path, minRadius))
+				goto failed;
+			highDone++;
 			continue;
 		}
 		if (RndI(0, 3) == 0) {
@@ -791,6 +847,25 @@ failed:
 	return 0;
 }
 
+/* The highways of a road: per stretch both carriageways, straight north
+   from well before the junction to well after the exit (shortened where
+   they would run into another part of the road). */
+#define kHighLaneWidth 84.0f
+#define kHighHalf (1.5f * kHighLaneWidth)	/* three lanes */
+#define kHighMedian 70.0f
+#define kHighSep (2 * kHighHalf + kHighMedian)	/* carriageway center to center */
+
+typedef struct {
+	float jx, jy, dx, dy;	/* the junction on the forward carriageway, its heading */
+	float back, length, ahead;	/* how far it reaches before, along and after the stretch */
+	float s0, s1;
+	/* bridges over the road where it crosses another part of it: where
+	   (along), how long, and the heading of the road below */
+	int unders;
+	float underAlong[2], underHalf[2], underX[2], underY[2];
+} tHighway;
+static int MakeHighways(const tPath *path, float hw, tHighway *out);
+
 /* Forks: a side road leaves the road to one side and joins it again,
    on stretches without bridges and away from the rest of the road. */
 typedef struct {
@@ -808,7 +883,8 @@ static void FreeForks(tForks *forks)
 	memset(forks, 0, sizeof(*forks));
 }
 
-static int MakeForks(const tLevelGen *gen, const tPath *path, float finishS, float hw, tForks *forks)
+static int MakeForks(const tLevelGen *gen, const tPath *path, float finishS, float hw, tForks *forks,
+	const tHighway *highs, int highCount)
 {
 	int fork, wanted = gen->forks & 3, made = 0, capacity = 0;
 	float used[4][2];
@@ -821,6 +897,9 @@ static int MakeForks(const tLevelGen *gen, const tPath *path, float finishS, flo
 			int i0 = (int)(s0 / kRouteStep), i1 = (int)(s1 / kRouteStep), i, k, ok = 1, start;
 			for (k = 0; k < made && ok; ++k)
 				if (s1 > used[k][0] - 1500 && s0 < used[k][1] + 1500)
+					ok = 0;
+			for (k = 0; k < path->highways && ok; ++k)	/* not on a highway stretch */
+				if (s1 > path->highS0[k] - 2500 && s0 < path->highS1[k] + 2500)
 					ok = 0;
 			for (i = i0 - 300; i <= i1 + 300 && ok; ++i)	/* no bridge near it */
 				if (i >= 0 && i < path->count && path->deck[i])
@@ -859,6 +938,15 @@ static int MakeForks(const tLevelGen *gen, const tPath *path, float finishS, flo
 				float l = sqrtf(hx * hx + hy * hy);
 				forks->points[i].hx = l > 0 ? hx / l : path->points[(int)(forks->s[i] / kRouteStep)].hx;
 				forks->points[i].hy = l > 0 ? hy / l : path->points[(int)(forks->s[i] / kRouteStep)].hy;
+				/* nowhere near a highway (it would cross it) */
+				if ((i - start) % 10 == 0)
+					for (k = 0; k < highCount && ok; ++k) {
+						float ex = forks->points[i].x - highs[k].jx, ey = forks->points[i].y - highs[k].jy;
+						float along = ex * highs[k].dx + ey * highs[k].dy, left = -ex * highs[k].dy + ey * highs[k].dx;
+						if (along > -highs[k].back - 400 && along < highs[k].length + highs[k].ahead + 400 &&
+							Abs(left - kHighSep * 0.5f) < kHighSep * 0.5f + kHighHalf + hw + 120)
+							ok = 0;
+					}
 				/* (where it leaves and joins it lies on the road by design:
 				   only the part away from it is checked) */
 				if ((i - start) % 10 || (1 - cosf(6.2831853f * (forks->s[i] - s0) / length)) * 0.5f * offset < 2 * hw)
@@ -888,6 +976,280 @@ static int MakeForks(const tLevelGen *gen, const tPath *path, float finishS, flo
 	return 1;
 }
 
+/* A point of a highway: along from its junction, across to the left. */
+static void HighwayPoint(const tHighway *high, float along, float left, float *x, float *y)
+{
+	*x = high->jx + high->dx * along - high->dy * left;
+	*y = high->jy + high->dy * along + high->dx * left;
+}
+
+/* A ramp between two points with headings: a smooth curve, one point
+   every kRouteStep. */
+#define kRampHalf 46.0f
+static tRoutePoint *RampCurve(float x0, float y0, float h0x, float h0y, float x3, float y3, float h3x, float h3y, int *count)
+{
+	float k = sqrtf((x3 - x0) * (x3 - x0) + (y3 - y0) * (y3 - y0)) * 0.4f, length = 0, next = 0, px = x0, py = y0;
+	float x1 = x0 + h0x * k, y1 = y0 + h0y * k, x2 = x3 - h3x * k, y2 = y3 - h3y * k;
+	int max = 4000, n = 0, step;
+	tRoutePoint *points = (tRoutePoint *)malloc((size_t)max * sizeof(tRoutePoint));
+	if (!points)
+		return NULL;
+	for (step = 0; step <= 4000 && n < max; ++step) {
+		float t = step / 4000.0f, u = 1 - t;
+		float x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
+		float y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
+		float dx = 3 * u * u * (x1 - x0) + 6 * u * t * (x2 - x1) + 3 * t * t * (x3 - x2);
+		float dy = 3 * u * u * (y1 - y0) + 6 * u * t * (y2 - y1) + 3 * t * t * (y3 - y2), d = sqrtf(dx * dx + dy * dy);
+		length += sqrtf((x - px) * (x - px) + (y - py) * (y - py));
+		px = x;
+		py = y;
+		if (length >= next) {
+			points[n].x = x;
+			points[n].y = y;
+			points[n].hx = d > 0 ? dx / d : h0x;
+			points[n].hy = d > 0 ? dy / d : h0y;
+			n++;
+			next += kRouteStep;
+		}
+	}
+	*count = n;
+	return points;
+}
+
+static void HighwayPoint(const tHighway *high, float along, float left, float *x, float *y);
+
+/* A ramp in two curves, through a middle point with its heading; split:
+   where the second curve starts. */
+static tRoutePoint *RampCurve2(float x0, float y0, float h0x, float h0y, float xm, float ym, float hmx, float hmy,
+	float x3, float y3, float h3x, float h3y, int *count, int *split)
+{
+	int n1, n2;
+	tRoutePoint *first = RampCurve(x0, y0, h0x, h0y, xm, ym, hmx, hmy, &n1);
+	tRoutePoint *second = RampCurve(xm, ym, hmx, hmy, x3, y3, h3x, h3y, &n2), *all;
+	if (!first || !second || n1 < 2 || n2 < 2) {
+		free(first);
+		free(second);
+		return NULL;
+	}
+	all = (tRoutePoint *)realloc(first, (size_t)(n1 + n2 - 1) * sizeof(tRoutePoint));
+	if (!all) {
+		free(first);
+		free(second);
+		return NULL;
+	}
+	memcpy(all + n1, second + 1, (size_t)(n2 - 1) * sizeof(tRoutePoint));
+	free(second);
+	*count = n1 + n2 - 1;
+	*split = n1 - 1;
+	return all;
+}
+
+/* A ramp over the north carriageway: its road (a bridge where it is over
+   the carriageway), the crossing and its traffic track. */
+static tTrackInfo *Ramp(const tHighway *high, tRoutePoint *points, int count, float velo, const tPath *path, float hw,
+	int crossFrom, int crossTo)
+{
+	UInt8 *deck = (UInt8 *)calloc((size_t)count, 1);
+	tTrackInfo *track = (tTrackInfo *)calloc(1, sizeof(UInt32) + (size_t)(count / 40 + 3) * sizeof(tTrackInfoSeg));
+	float bestMiddle = 1e9f;
+	int i, best = -1, blocked = 0;
+	if (!deck || !track || sRampTrackCount >= 8) {
+		free(deck);
+		free(track);
+		free(points);
+		return NULL;
+	}
+	for (i = crossFrom; i < crossTo && i < count; ++i) {
+		float rx = points[i].x - high->jx, ry = points[i].y - high->jy;
+		float along = rx * high->dx + ry * high->dy, left = -rx * high->dy + ry * high->dx;
+		int over = along > -high->back && along < high->length + high->ahead;
+		/* over both carriageways, rising from beside them */
+		if (over && left > -(kHighHalf + 60) && left < kHighSep + kHighHalf + 60) {
+			/* never over the road it comes down to (its edge included) */
+			float clear = (hw + kRampHalf + 40) * (hw + kRampHalf + 40);
+			int k;
+			deck[i] = 1;
+			for (k = 0; k < path->count && deck[i]; k += 4) {
+				float ex = path->points[k].x - points[i].x, ey = path->points[k].y - points[i].y;
+				if (ex * ex + ey * ey < clear)
+					deck[i] = 0;
+			}
+		}
+		if (over && !deck[i] && (Abs(left) < kHighHalf + 10 || Abs(left - kHighSep) < kHighHalf + 10))
+			blocked = 1;	/* it would cross a carriageway on the ground */
+		if (Abs(left - kHighSep * 0.5f) < bestMiddle) {
+			bestMiddle = Abs(left - kHighSep * 0.5f);
+			best = i;
+		}
+	}
+	if (blocked || best < 0 || bestMiddle > kHighMedian) {	/* no room for its bridge here: no ramp */
+		free(deck);
+		free(track);
+		free(points);
+		return NULL;
+	}
+	{
+		float cross = Abs(points[best].hx * high->dy - points[best].hy * high->dx);
+		if (cross < 0.3f)
+			cross = 0.3f;
+		Route_PendingRampCrossing(points[best].x, points[best].y, points[best].hx, points[best].hy, high->dx, high->dy,
+			(kHighSep * 0.5f + kHighHalf + 60) / cross, kRampHalf + 10);
+	}
+	for (i = 0; i < count; i += 40) {
+		track->track[track->num].x = (SInt16)points[i].x;
+		track->track[track->num].y = (SInt32)points[i].y;
+		track->track[track->num].velo = velo;
+		track->num++;
+	}
+	track->track[track->num].x = (SInt16)points[count - 1].x;
+	track->track[track->num].y = (SInt32)points[count - 1].y;
+	track->track[track->num].velo = velo;
+	track->num++;
+	Route_PendingExtraRoad(points, deck, count, kRampHalf, 1);
+	sRampTracks[sRampTrackCount++] = track;
+	return track;
+}
+
+/* How far from the junction the road is clear of the highway (where the
+   other direction's ramp meets it): dir -1 before s, +1 after. */
+static float RampDistance(const tPath *path, const tHighway *high, float s, int dir, float hw)
+{
+	float d;
+	for (d = 700; d < 2400; d += 50) {
+		int i = (int)((s + dir * d) / kRouteStep);
+		float rx, ry;
+		if (i < 0 || i >= path->count)
+			break;
+		rx = path->points[i].x - high->jx;
+		ry = path->points[i].y - high->jy;
+		if (-(-rx * high->dy + ry * high->dx) > kHighHalf + hw + 220)	/* well right of the highway */
+			return d;
+	}
+	return 0;
+}
+
+/* How far along a highway (from its junction) a point is. */
+static float AlongHighway(const tHighway *high, const tRoutePoint *p)
+{
+	return (p->x - high->jx) * high->dx + (p->y - high->jy) * high->dy;
+}
+
+static int MakeHighways(const tPath *path, float hw, tHighway *out)
+{
+	int h, n = 0;
+	for (h = 0; h < path->highways; ++h) {
+		int i0 = (int)(path->highS0[h] / kRouteStep), k;
+		tHighway *high = &out[n];
+		float limit[2] = {3500, 3500};
+		high->jx = path->points[i0].x;
+		high->jy = path->points[i0].y;
+		high->dx = sinf(path->highPhi[h]);
+		high->dy = cosf(path->highPhi[h]);
+		high->s0 = path->highS0[h];
+		high->s1 = path->highS1[h];
+		high->length = high->s1 - high->s0;
+		/* another part of the road: crossing it, the highway goes over it on
+		   a bridge; running alongside, it shortens the highway's end */
+		high->unders = 0;
+		for (k = 0; k < path->count; k += 4) {
+			float s = k * kRouteStep, ex = path->points[k].x - high->jx, ey = path->points[k].y - high->jy;
+			float along = ex * high->dx + ey * high->dy, left = -ex * high->dy + ey * high->dx;
+			float cross = Abs(path->points[k].hx * high->dy - path->points[k].hy * high->dx);
+			int u, near = -1;
+			if (s > high->s0 - 1800 && s < high->s1 + 1800)	/* (its own junctions) */
+				continue;
+			if (Abs(left - kHighSep * 0.5f) > kHighSep * 0.5f + kHighHalf + hw + 80)
+				continue;
+			if (cross > 0.6f && !path->deck[k] && (along < -300 || along > high->length + 300)) {
+				for (u = 0; u < high->unders; ++u)
+					if (Abs(high->underAlong[u] - along) < 700)
+						near = u;
+				if (near < 0 && high->unders < 2) {
+					near = high->unders++;
+					high->underX[near] = 1e9f;
+				}
+				/* the point where it passes the highway's middle */
+				if (near >= 0 && Abs(left - kHighSep * 0.5f) < Abs(high->underX[near])) {
+					high->underX[near] = left - kHighSep * 0.5f;
+					high->underAlong[near] = along;
+					high->underHalf[near] = (hw + 230) / (cross > 0.5f ? cross : 0.5f);	/* over the road and its verges */
+					high->underY[near] = (float)k;	/* (the road point, for its heading) */
+				}
+				if (near >= 0)
+					continue;
+			}
+			/* (room for the tunnel's hill beyond the end) */
+			if (along < 0 && -along - hw - 420 < limit[0])
+				limit[0] = -along - hw - 420;
+			if (along > high->length && along - high->length - hw - 420 < limit[1])
+				limit[1] = along - high->length - hw - 420;
+		}
+		{	/* bridges beyond a shortened end are not needed; one too near the
+			   end (no room for it) shortens the end instead */
+			int u, kept = 0;
+			float limit0 = limit[0], limit1 = limit[1];
+			for (u = 0; u < high->unders; ++u) {
+				float along = high->underAlong[u];
+				if (along < 0 && along - high->underHalf[u] <= -limit0 + 200 && -along - hw - 420 < limit[0])
+					limit[0] = -along - hw - 420;
+				if (along > high->length && along + high->underHalf[u] >= high->length + limit1 - 200 &&
+					along - high->length - hw - 420 < limit[1])
+					limit[1] = along - high->length - hw - 420;
+			}
+			for (u = 0; u < high->unders; ++u)
+				if (high->underAlong[u] - high->underHalf[u] > -limit[0] + 200 &&
+					high->underAlong[u] + high->underHalf[u] < high->length + limit[1] - 200) {
+					high->underAlong[kept] = high->underAlong[u];
+					high->underHalf[kept] = high->underHalf[u];
+					high->underX[kept] = high->underX[u];
+					high->underY[kept] = high->underY[u];
+					kept++;
+				}
+			high->unders = kept;
+		}
+		if (limit[0] < 400 || limit[1] < 400)
+			continue;	/* no room: this stretch stays a plain road */
+		high->back = limit[0];
+		high->ahead = limit[1];
+		n++;
+	}
+	return n;
+}
+
+/* Is this point of a highway on one of its bridges? */
+static int OnHighwayBridge(const tHighway *high, float along)
+{
+	int u;
+	for (u = 0; u < high->unders; ++u)
+		if (Abs(along - high->underAlong[u]) <= high->underHalf[u])
+			return 1;
+	return 0;
+}
+
+/* One carriageway: left of the forward one by left, heading the way given;
+   deck: where it is on a bridge. */
+static tRoutePoint *Carriageway(const tHighway *high, float left, int forward, int *count, UInt8 **deck)
+{
+	float total = high->back + high->length + high->ahead;
+	int n = (int)(total / kRouteStep) + 1, i;
+	tRoutePoint *points = (tRoutePoint *)malloc((size_t)n * sizeof(tRoutePoint));
+	*deck = high->unders ? (UInt8 *)calloc((size_t)n, 1) : NULL;
+	if (!points) {
+		free(*deck);
+		*deck = NULL;
+		return NULL;
+	}
+	for (i = 0; i < n; ++i) {
+		if (*deck)
+			(*deck)[i] = (UInt8)OnHighwayBridge(high, -high->back + i * kRouteStep);
+		HighwayPoint(high, -high->back + i * kRouteStep, left, &points[i].x, &points[i].y);
+		points[i].hx = forward ? high->dx : -high->dx;
+		points[i].hy = forward ? high->dy : -high->dy;
+	}
+	*count = n;
+	return points;
+}
+
 /* Map for the menu: every step-th point of the road and where it is a
    bridge. */
 int LevelGen_PreviewRoute(const tLevelGen *gen, float *xs, float *ys, UInt8 *bridge, int max)
@@ -898,7 +1260,9 @@ int LevelGen_PreviewRoute(const tLevelGen *gen, float *xs, float *ys, UInt8 *bri
 	tForks forks;
 	if (!GenerateRoute(gen, 0, &path, &finishS))
 		return 0;
-	MakeForks(gen, &path, finishS, RouteHalfWidth(gen), &forks);
+	tHighway highs[4];
+	int highCount = MakeHighways(&path, RouteHalfWidth(gen), highs);
+	MakeForks(gen, &path, finishS, RouteHalfWidth(gen), &forks, highs, highCount);
 	step = path.count / (max * 3 / 4) + 1;
 	for (i = 0; i < path.count && n < max; i += step) {
 		xs[n] = path.points[i].x;
@@ -911,6 +1275,17 @@ int LevelGen_PreviewRoute(const tLevelGen *gen, float *xs, float *ys, UInt8 *bri
 		ys[n] = forks.points[i].y;
 		bridge[n] = 0;
 		n++;
+	}
+	{
+		int h, count = highCount;
+		float along;
+		for (h = 0; h < count; ++h)
+			for (along = -highs[h].back; along <= highs[h].length + highs[h].ahead && n < max;
+				along += step * kRouteStep * 2) {
+				HighwayPoint(&highs[h], along, kHighSep * 0.5f, &xs[n], &ys[n]);
+				bridge[n] = OnHighwayBridge(&highs[h], along) ? 1 : 2;	/* a highway, its bridges */
+				n++;
+			}
 	}
 	free(path.points);
 	free(path.deck);
@@ -926,14 +1301,169 @@ static int BuildRoute(const tLevelGen *gen, int levelIndex, const tBaseLevel *ba
 	float finishS, hw = RouteHalfWidth(gen), lane, length, s;
 	int i, count, rows, row;
 	tForks forks;
+	tHighway highs[4];
+	int highCount;
 	if (!GenerateRoute(gen, levelIndex, &path, &finishS))
 		return 0;
-	if (!MakeForks(gen, &path, finishS, hw, &forks)) {
+	highCount = MakeHighways(&path, hw, highs);
+	if (!MakeForks(gen, &path, finishS, hw, &forks, highs, highCount)) {
 		free(path.points);
 		free(path.deck);
 		return 0;
 	}
 	gGenLanes = (gen->width & 3) >= 2 ? (gen->width & 3) : 1;
+	/* highways: both carriageways, their own traffic tracks, the signs */
+	{
+		int h;
+		for (h = 0; h < highCount; ++h) {
+			const tHighway *high = &highs[h];
+			float along, velo = kTrafficSpeed[gen->speed & 3] * 1.5f + 6;
+			float total = high->back + high->length + high->ahead;
+			int n, k, exitIndex = 0, entryIndex = 0;
+			UInt8 *deckF, *deckB;
+			tRoutePoint *forward = Carriageway(high, 0, 1, &n, &deckF), *back;
+			tTrackInfo *trackF, *trackB;
+			int points = (int)(total / 150) + 2;
+			if (!forward)
+				continue;
+			Route_PendingExtraRoad(forward, deckF, n, kHighHalf, 3);
+			back = Carriageway(high, kHighSep, 0, &n, &deckB);
+			if (back)
+				Route_PendingExtraRoad(back, deckB, n, kHighHalf, 3);
+			for (k = 0; k < high->unders; ++k) {	/* its bridges over the road */
+				float x, y;
+				const tRoutePoint *below = &path.points[(int)high->underY[k]];
+				/* the median is part of the bridge too (no gap between the
+				   carriageways), with a barrier along its edges */
+				int m, count = (int)(2 * high->underHalf[k] / kRouteStep) + 1;
+				tRoutePoint *median = (tRoutePoint *)malloc((size_t)count * sizeof(tRoutePoint));
+				UInt8 *medianDeck = (UInt8 *)malloc((size_t)count);
+				if (median && medianDeck) {
+					for (m = 0; m < count; ++m) {
+						HighwayPoint(high, high->underAlong[k] - high->underHalf[k] + m * kRouteStep, kHighSep * 0.5f,
+							&median[m].x, &median[m].y);
+						median[m].hx = high->dx;
+						median[m].hy = high->dy;
+						medianDeck[m] = 1;
+					}
+					Route_PendingExtraRoad(median, medianDeck, count, kHighMedian * 0.5f + 4, 1);
+				} else {
+					free(median);
+					free(medianDeck);
+				}
+				HighwayPoint(high, high->underAlong[k], kHighSep * 0.5f, &x, &y);
+				Route_PendingCrossing(x, y, high->dx, high->dy, below->hx, below->hy,
+					high->underHalf[k], kHighSep * 0.5f + kHighHalf);
+			}
+			trackF = (tTrackInfo *)calloc(1, sizeof(UInt32) + (size_t)points * sizeof(tTrackInfoSeg));
+			trackB = (tTrackInfo *)calloc(1, sizeof(UInt32) + (size_t)points * sizeof(tTrackInfoSeg));
+			if (!trackF || !trackB || sHighTrackCount > 6) {
+				free(trackF);
+				free(trackB);
+				continue;
+			}
+			sHighTracks[sHighTrackCount++] = trackF;
+			sHighTracks[sHighTrackCount++] = trackB;
+			for (along = -high->back; along <= high->length + high->ahead && (int)trackF->num < points; along += 150) {
+				float x, y;
+				HighwayPoint(high, along, 0, &x, &y);
+				trackF->track[trackF->num].x = (SInt16)x;
+				trackF->track[trackF->num].y = (SInt32)y;
+				trackF->track[trackF->num].velo = velo;
+				if (along <= high->length + 150)
+					exitIndex = trackF->num;
+				trackF->num++;
+			}
+			for (k = (int)trackF->num - 1; k >= 0; --k) {
+				float x, y, a = -high->back + k * 150.0f;
+				HighwayPoint(high, a, kHighSep, &x, &y);
+				trackB->track[trackB->num].x = (SInt16)x;
+				trackB->track[trackB->num].y = (SInt32)y;
+				trackB->track[trackB->num].velo = velo;
+				if (a >= 50)
+					entryIndex = trackB->num;
+				trackB->num++;
+			}
+			Route_PendingHighway(high->s0, high->s1, kHighSep, trackF, trackB, exitIndex, entryIndex);
+			/* the road's other direction does not cross the highway: it has
+			   its own ramps, over the north carriageway on a bridge */
+			{
+				float d0 = RampDistance(&path, high, high->s0, -1, hw), d1 = RampDistance(&path, high, high->s1, 1, hw);
+				float rampVelo = kTrafficSpeed[gen->speed & 3];
+				tTrackInfo *entryRamp = NULL, *exitRamp = NULL;
+				int rampFrom = 0, c;
+				/* it crosses where the road is well away from the highway
+				   (not over the road's own slip road) and meets the road
+				   a little further on */
+				int i0 = (int)((high->s0 - d0 - 700) / kRouteStep), i1 = (int)((high->s1 + d1 + 700) / kRouteStep);
+				float c0 = d0 > 0 ? AlongHighway(high, &path.points[(int)((high->s0 - d0) / kRouteStep)]) : 0;
+				float c1 = d1 > 0 ? AlongHighway(high, &path.points[(int)((high->s1 + d1) / kRouteStep)]) : 0;
+				/* the other carriageway's ramps: off it to the right, round
+				   and over both carriageways to the road; from the road over
+				   both and round onto it from the right */
+				float ox = -high->dy, oy = high->dx;	/* outwards, beyond the south carriageway */
+				float outer = kHighSep + kHighHalf + 170;
+				if (d0 > 0 && i0 > 0 && high->back > -c0 + 1300) {
+					const tRoutePoint *at = &path.points[i0];
+					float x0, y0, xm, ym, a0 = c0 + 900, best = 1e9f, hl;
+					float hmx = -0.35f * high->dx - ox, hmy = -0.35f * high->dy - oy;
+					int split = 0;
+					tRoutePoint *curve;
+					hl = sqrtf(hmx * hmx + hmy * hmy);
+					hmx /= hl;
+					hmy /= hl;
+					HighwayPoint(high, a0, kHighSep + kHighLaneWidth, &x0, &y0);
+					HighwayPoint(high, c0 + 250, outer, &xm, &ym);
+					curve = RampCurve2(x0, y0, -high->dx, -high->dy, xm, ym, hmx, hmy,
+						at->x - at->hy * hw * 0.5f, at->y + at->hx * hw * 0.5f, -at->hx, -at->hy, &c, &split);
+					if (curve)
+						entryRamp = Ramp(high, curve, c, rampVelo, &path, hw, split, c);
+					for (k = 0; k < (int)trackB->num; ++k) {	/* where on the south track it leaves */
+						float a = -high->back + ((int)trackB->num - 1 - k) * 150.0f;
+						if (a > a0 && a - a0 < best) {
+							best = a - a0;
+							rampFrom = k;
+						}
+					}
+				}
+				if (d1 > 0 && i1 < path.count && high->ahead > c1 - high->length + 450) {
+					const tRoutePoint *at = &path.points[i1];
+					float x3, y3, xm, ym, hl;
+					float hmx = -0.35f * high->dx + ox, hmy = -0.35f * high->dy + oy;
+					int split = 0;
+					tRoutePoint *curve;
+					hl = sqrtf(hmx * hmx + hmy * hmy);
+					hmx /= hl;
+					hmy /= hl;
+					HighwayPoint(high, c1 - 300, outer, &xm, &ym);
+					HighwayPoint(high, c1 - 1100, kHighSep + kHighLaneWidth, &x3, &y3);
+					curve = RampCurve2(at->x - at->hy * hw * 0.5f, at->y + at->hx * hw * 0.5f, -at->hx, -at->hy,
+						xm, ym, hmx, hmy, x3, y3, -high->dx, -high->dy, &c, &split);
+					if (curve)
+						exitRamp = Ramp(high, curve, c, rampVelo, &path, hw, 0, split);
+				}
+				Route_PendingRamps(entryRamp, rampFrom, exitRamp, high->s1 + d1 + 700);
+			}
+			{	/* it ends in a tunnel at both ends */
+				float x, y, width = kHighSep + 2 * kHighHalf + 20;
+				HighwayPoint(high, -high->back, kHighSep * 0.5f, &x, &y);
+				Route_PendingTunnel(x, y, -high->dx, -high->dy, width, 220);
+				HighwayPoint(high, high->length + high->ahead, kHighSep * 0.5f, &x, &y);
+				Route_PendingTunnel(x, y, high->dx, high->dy, width, 220);
+			}
+			/* signs: onto the highway, and the exit to the finish */
+			{
+				t2DPoint at;
+				float dir, phi = atan2f(high->dx, high->dy);
+				Route_Point(high->s0 - 700, hw + 70, &at, &dir);
+				Route_PendingSign(at.x, at.y, dir, "HIGHWAY");
+				Route_Point(high->s1 - 650, kHighHalf + 70, &at, &dir);
+				Route_PendingSign(at.x, at.y, phi + 0.7f, "EXIT  FINISH");
+				Route_Point(high->s1 - 1900, kHighHalf + 70, &at, &dir);
+				Route_PendingSign(at.x, at.y, phi, "FINISH: EXIT");
+			}
+		}
+	}
 	/* route.c takes the points over */
 	if (!Route_Setup(path.points, path.count, hw, path.deck, finishS,
 		forks.points, forks.s, forks.id, forks.count))
@@ -976,15 +1506,16 @@ static int BuildRoute(const tLevelGen *gen, int levelIndex, const tBaseLevel *ba
 	for (s = 0; s <= length && (int)sUp->num < count; s += 150) {	/* kRouteTrackGap */
 		t2DPoint pos, h1 = Route_Heading(s), h2 = Route_Heading(s + 150);
 		float bend = 1 - (h1.x * h2.x + h1.y * h2.y), slow = sqrtf(bend * 2) * 1.2f;
-		Route_Point(s, lane, &pos, NULL);
+		Route_Point(s, Route_TrafficOffset(s, 1), &pos, NULL);
 		sUp->track[sUp->num].x = (SInt16)pos.x;
 		sUp->track[sUp->num].y = (SInt32)pos.y;
-		sUp->track[sUp->num].velo = kTrafficSpeed[gen->speed & 3] * (1 - (slow > 0.5f ? 0.5f : slow));
+		sUp->track[sUp->num].velo = kTrafficSpeed[gen->speed & 3] * (1 - (slow > 0.5f ? 0.5f : slow)) *
+			(Route_TrafficOffset(s, 0) < -hw ? 1.4f : 1);	/* faster on a highway */
 		sUp->num++;
 	}
 	for (i = (int)sUp->num - 1; i >= 0; --i) {
 		t2DPoint pos;
-		Route_Point(i * 150.0f, -lane, &pos, NULL);
+		Route_Point(i * 150.0f, Route_TrafficOffset(i * 150.0f, 0), &pos, NULL);
 		sDown->track[sDown->num].x = (SInt16)pos.x;
 		sDown->track[sDown->num].y = (SInt32)pos.y;
 		sDown->track[sDown->num].velo = sUp->track[i].velo;
@@ -1029,6 +1560,47 @@ static int BuildRoute(const tLevelGen *gen, int levelIndex, const tBaseLevel *ba
 				if (line)
 					Route_Point(finishS - i, -hw + 2 * hw * (piece + 0.5f) / pieces, &line->pos, NULL);
 			}
+	}
+	/* the highways' own traffic, both ways, spread along them */
+	{
+		static const float kHighTraffic[4] = {0, 0.5f, 1, 1.7f};
+		SInt16 types[32];
+		int typeCount = 0, t;
+		for (i = 0; i < 10 && typeCount < 32; ++i) {
+			tObjectGroup *group;
+			int entry;
+			if (!base->groups[i].resID)
+				continue;
+			group = (tObjectGroup *)GetSortedPackEntry(kPackOgrp, base->groups[i].resID, NULL);
+			for (entry = 0; group && entry < (int)group->numEntries && typeCount < 32; ++entry) {
+				tObjectType *type = (tObjectType *)GetSortedPackEntry(kPackObTy, group->data[entry].typeRes, NULL);
+				if (type && group->data[entry].probility && type->flags & kObjectWheelFlag &&
+					!(type->flags & kObjectCop) && type->width >= 1.0f)
+					types[typeCount++] = group->data[entry].typeRes;
+			}
+		}
+		for (t = 0; typeCount && t < sHighTrackCount; ++t) {
+			tTrackInfo *track = sHighTracks[t];
+			int cars = (int)(track->num / 2 * kHighTraffic[gen->traffic & 3]), c;
+			Route_KeepHighwayCars(track, cars);
+			for (c = 0; c < cars; ++c) {
+				int at = RanInt(1, (int)track->num - 1);
+				tObject *car = NewObject(gFirstObj, types[RanInt(0, typeCount)]);
+				float dir, lateral;
+				if (!car)
+					continue;
+				dir = atan2f((float)(track->track[at].x - track->track[at - 1].x),
+					(float)(track->track[at].y - track->track[at - 1].y));
+				car->lane = (SInt8)RanInt(0, 3);
+				lateral = (car->lane - 1) * kHighLaneWidth;
+				car->pos = P2D(track->track[at - 1].x + cosf(dir) * lateral, track->track[at - 1].y - sinf(dir) * lateral);
+				car->dir = dir;
+				car->velo = VEC2D_Scale(P2D(sinf(dir), cosf(dir)), track->track[at].velo * 0.7f);
+				car->control = kObjectDriveUp;
+				car->ownTrack = track;
+				car->target = at;
+			}
+		}
 	}
 	/* ramps on long straight stretches */
 	if (kJumps[gen->jumps & 3]) {
@@ -1078,7 +1650,7 @@ int LevelGen_Build(const tLevelGen *gen, int levelIndex)
 	roadInfo = (tRoadInfo *)GetSortedPackEntry(kPackRoad, base.roadInfo, NULL);
 	if (!roadInfo)
 		return 0;
-	if ((gen->crossings || gen->forks) && !water) {	/* a free-form road: crossings, forks */
+	if ((gen->crossings || gen->forks || gen->highways) && !water) {	/* a free-form road */
 		if (!BuildRoute(gen, levelIndex, &base, roadInfo)) {
 			LevelGen_Dispose();
 			return 0;

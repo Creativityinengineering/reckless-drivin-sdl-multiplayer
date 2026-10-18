@@ -49,7 +49,7 @@ typedef socklen_t NetworkSockLen;
 #endif
 
 #define kNetworkMagic 0x52444d50u
-#define kNetworkVersion 21
+#define kNetworkVersion 22
 #define kNetworkIntervalMS 50
 #define kNetworkTimeoutMS 10000
 
@@ -1914,6 +1914,21 @@ float Network_NearestDriverDistance(float y)
 				best = distance;
 		}
 	return best < INFINITY ? best : fabsf(y - gCameraObj->pos.y);
+}
+
+/* Distance from the nearest driver, both ways (free-form roads run sideways too). */
+float Network_NearestDriverDistance2D(t2DPoint pos)
+{
+	float best = INFINITY;
+	int slot;
+	if (Network_IsActive())
+		for (slot = 0; slot < kNetworkMaxPlayers; ++slot)
+			if (sPlayers[slot].active && gPlayers[slot].obj) {
+				float distance = VEC2D_Value(VEC2D_Difference(pos, gPlayers[slot].obj->pos));
+				if (distance < best)
+					best = distance;
+			}
+	return best < INFINITY ? best : VEC2D_Value(VEC2D_Difference(pos, gCameraObj->pos));
 }
 
 /* Road range covered by all drivers, for the objects simulated each frame. */

@@ -69,9 +69,37 @@ void Route_TrackObject(void *object);	/* updates its routeS */
 int Route_TrackTarget(const void *track, t2DPoint pos);
 int Route_TargetPassed(const void *track, void *object);
 float Route_BridgeS(int index);
-float Route_ForkS(int index);	/* where the i-th fork leaves the road, -1: none */
+float Route_ForkS(int index);
+int Route_CrossingCenter(int index, t2DPoint *at);	/* the i-th bridge's middle */	/* where the i-th fork leaves the road, -1: none */
 int Route_FellOffBridge(void *object);
 void Route_Landed(void *object);	/* a jump ended: bridge or below */
 int Route_WallBelow(void *object);	/* below a bridge: walls beside the road */	/* thrown off a bridge's side: falls */	/* where the i-th bridge starts, -1: none */
+
+/* Highways (before Route_Setup, which takes them over): a carriageway as an
+   extra road, a stretch of the road on a highway (oncoming traffic sep to
+   the left), a road sign. Route_DropPending if the setup does not happen. */
+void Route_PendingExtraRoad(tRoutePoint *points, UInt8 *deck, int count, float half, int lanes);
+/* A highway bridge over the road (both carriageways as one deck). */
+void Route_PendingCrossing(float x, float y, float bridgeX, float bridgeY, float belowX, float belowY,
+	float deckHalf, float acrossHalf);
+void Route_PendingHighway(float s0, float s1, float sep, void *north, void *south,
+	int exitIndex, int entryIndex);
+void Route_PendingSign(float x, float y, float dir, const char *text);
+/* The last highway's ramps for the road's other direction (own tracks). */
+void Route_PendingRamps(void *entryRamp, int rampFrom, void *exitRamp, float exitRampS);
+void Route_PendingRampCrossing(float x, float y, float bridgeX, float bridgeY, float belowX, float belowY,
+	float deckHalf, float acrossHalf);
+int Route_OwnTrackEnd(void *object);	/* off a ramp at its end; 0: not a ramp */
+int Route_IsRamp(const void *track);
+int Route_HighwayFull(const void *track);	/* more cars than it keeps */
+void Route_DropPending(void);
+/* A tunnel where a highway ends: its end point, the way in, width, depth. */
+void Route_PendingTunnel(float x, float y, float dx, float dy, float width, float depth);
+int Route_TunnelWall(void *object);	/* drivers stop at a tunnel portal */
+float Route_TrafficOffset(float s, int up);	/* traffic's side offset at s */
+void Route_HighwayCarAt(void *object, int index);	/* a highway car reached point index */
+int Route_RoadCarAt(void *object, float before);	/* a road car moved on from before; 1: wait */
+int Route_OnHighway(const void *object);	/* on a highway: no turning round */
+void Route_KeepHighwayCars(const void *track, int count);
 
 #endif

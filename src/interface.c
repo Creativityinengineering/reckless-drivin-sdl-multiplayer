@@ -711,25 +711,26 @@ static void StepStartLevel(int step)
    generator: a seed and track settings, written as a level code that gives
    the same level again on any computer. ---- */
 #define kLevelRowY 66
-#define kLevelRowH 17
+#define kLevelRowH 16
 #define kPreviewX 92
 #define kPreviewY 342
 #define kPreviewW 456
 #define kPreviewH 54
 enum {
 	kLevelRowSource, kLevelRowFirstSetting,	/* landscape, then 8 settings */
-	kLevelRowSeed = kLevelRowFirstSetting + 11, kLevelRowCode, kLevelRowSave,
+	kLevelRowSeed = kLevelRowFirstSetting + 12, kLevelRowCode, kLevelRowSave,
 	kLevelRowSaved, kLevelRowCount
 };
-static const char *const kSettingLabels[10] = {
+static const char *const kSettingLabels[11] = {
 	"LENGTH", "CURVES", "ROAD", "TRAFFIC", "TRAFFIC SPEED", "POLICE", "JUMPS", "TIME LIMIT",
-	"CROSSINGS", "FORKS"
+	"CROSSINGS", "FORKS", "HIGHWAYS"
 };
 
 static UInt8 *GenSetting(tLevelGen *gen, int setting)
 {
-	UInt8 *values[10] = {&gen->length, &gen->curves, &gen->width, &gen->traffic,
-		&gen->speed, &gen->cops, &gen->jumps, &gen->time, &gen->crossings, &gen->forks};
+	UInt8 *values[11] = {&gen->length, &gen->curves, &gen->width, &gen->traffic,
+		&gen->speed, &gen->cops, &gen->jumps, &gen->time, &gen->crossings, &gen->forks,
+		&gen->highways};
 	return values[setting];
 }
 
@@ -746,7 +747,7 @@ static void DrawTrackPreview(tPixel *fb, int stride)
 	};
 	float low = 1e9f, high = -1e9f, scale;
 	int column, i, water = gLevelGen.landscape == 4;
-	if ((gLevelGen.crossings || gLevelGen.forks) && !water) {
+	if ((gLevelGen.crossings || gLevelGen.forks || gLevelGen.highways) && !water) {
 		/* a free-form road: its real shape, loops and bridges, turned
 		   sideways (start left, finish right) */
 		static float xs[900], ys[900];
@@ -769,19 +770,23 @@ static void DrawTrackPreview(tPixel *fb, int stride)
 			if (ys[i] < minY) minY = ys[i];
 			if (ys[i] > maxY) maxY = ys[i];
 		}
+		/* stretched to fill the map both ways: east-west highways and loops
+		   would leave the rest of the road a tiny scribble otherwise */
 		scale = (kPreviewW - 8) / (maxY - minY > 1 ? maxY - minY : 1);
-		if ((maxX - minX) * scale > kPreviewH - 8)
-			scale = (kPreviewH - 8) / (maxX - minX);
-		midX = (minX + maxX) * 0.5f;
-		for (pass = 0; pass < 2; ++pass)	/* the road, then the bridges on top */
-			for (i = 0; i < routeCount; ++i) {
-				int px = kPreviewX + 4 + (int)((ys[i] - minY) * scale);
-				int py = kPreviewY + kPreviewH / 2 - (int)((xs[i] - midX) * scale);
-				if (pass == 0)
-					TR_FillRect(fb, stride, px - 1, py - 1, 3, 3, 0x4A52);
-				else if (bridge[i])
-					TR_FillRect(fb, stride, px - 2, py - 2, 5, 5, 0x6B5A);
-			}
+		{
+			float scaleX = (kPreviewH - 10) / (maxX - minX > 1 ? maxX - minX : 1);
+			midX = (minX + maxX) * 0.5f;
+			for (pass = 0; pass < 2; ++pass)	/* the road, then the bridges on top */
+				for (i = 0; i < routeCount; ++i) {
+					int px = kPreviewX + 4 + (int)((ys[i] - minY) * scale);
+					int py = kPreviewY + kPreviewH / 2 - (int)((xs[i] - midX) * scaleX);
+					if (pass == 0)
+						TR_FillRect(fb, stride, px - 1, py - 1, 3, 3,
+							bridge[i] == 2 ? 0x318C : 0x4A52);	/* highways darker */
+					else if (bridge[i] == 1)
+						TR_FillRect(fb, stride, px - 2, py - 2, 5, 5, 0x6B5A);
+				}
+		}
 		TR_FillRect(fb, stride, kPreviewX, kPreviewY, 3, kPreviewH, COL_GREEN);
 		TR_FillRect(fb, stride, kPreviewX + kPreviewW - 3, kPreviewY, 3, kPreviewH, COL_RED);
 		TR_DrawString(fb, stride, kPreviewX + 6, kPreviewY + 3, "START", COL_WHITE, 1);
@@ -1033,6 +1038,8 @@ static void ChooseLevelSettings(void)
 	int selected = 0, seedTyped = 0;
 	const char *message = NULL;
 	UInt16 messageColor = COL_GREEN;
+	/* every change is kept at once (not only when leaving the screen) */
+	UInt32 keptPack = LevelGen_Pack(&gLevelGen) ^ (gLevelGenOn ? 0x80000000u : 0), keptSeed = gLevelGen.seed;
 	for (;;) {
 		int rows = gLevelGenOn ? kLevelRowCount : kLevelRowFirstSetting + 1, x, y, digit, activate = 0;
 		Platform_PollEvents();
@@ -1106,6 +1113,11 @@ static void ChooseLevelSettings(void)
 				if (ChooseSavedLevel())
 					message = "SAVED LEVEL LOADED", messageColor = COL_GREEN;
 			}
+		}
+		if ((LevelGen_Pack(&gLevelGen) ^ (gLevelGenOn ? 0x80000000u : 0)) != keptPack || gLevelGen.seed != keptSeed) {
+			LevelGen_SaveSettings();
+			keptPack = LevelGen_Pack(&gLevelGen) ^ (gLevelGenOn ? 0x80000000u : 0);
+			keptSeed = gLevelGen.seed;
 		}
 		DrawLevelSettings(selected, message, messageColor);
 		SDL_Delay(16);

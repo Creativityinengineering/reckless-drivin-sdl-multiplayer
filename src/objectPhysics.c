@@ -413,6 +413,14 @@ extern int gNoShieldDeath;
 
 void ObjectPhysics(tObject *theObj)
 {
+	/* a highway wreck is cleared away once nobody sees it (it would block
+	   the lanes for good); a fresh car comes out of the tunnel instead */
+	if(gRouteActive&&theObj->ownTrack&&theObj->control!=kObjectDriveUp&&!theObj->replica&&
+		Network_NearestDriverDistance2D(theObj->pos)>1000)
+	{
+		RemoveObject(theObj);
+		return;
+	}
 	/* free-form road: off a bridge's side the car drops onto the road
 	   below, battered, and drives on down there */
 	if(gRouteActive&&!theObj->replica&&theObj->type->flags&kObjectWheelFlag&&
@@ -429,6 +437,10 @@ void ObjectPhysics(tObject *theObj)
 	if(gRouteActive&&!theObj->replica&&theObj->type->flags&kObjectWheelFlag&&
 		Route_WallBelow(theObj)&&theObj==gPlayerObj)
 		FFBJolt(0.5,0.5,0.2);
+	/* (highway traffic drives on into the tunnel and comes out elsewhere) */
+	if(gRouteActive&&!theObj->replica&&theObj->type->flags&kObjectWheelFlag&&
+		!(theObj->ownTrack&&theObj->control==kObjectDriveUp)&&Route_TunnelWall(theObj)&&theObj==gPlayerObj)
+		FFBJolt(0.7,0.7,0.25);
 	if(!theObj->jumpHeight||theObj->type->flags&kObjectHeliFlag)
 	{
 		if(theObj->type->flags&kObjectWheelFlag)

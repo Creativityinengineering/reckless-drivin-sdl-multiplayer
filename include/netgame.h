@@ -76,6 +76,7 @@ int Network_IsDuel(void);
 int Network_GetDriverPlace(const tObject *object);
 int Network_GetFinishedDriverCount(void);
 float Network_NearestDriverDistance(float y);
+float Network_NearestDriverDistance2D(t2DPoint pos);
 void Network_GetDriverRange(float *minY, float *maxY);
 int Network_GetPlacementBonus(int place);
 int Network_IsTrailingDriver(const tObject *object);

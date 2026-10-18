@@ -126,6 +126,7 @@ typedef struct{
 	SInt8 lane;				/* generated multi-lane road: the car's lane + 1, 0 = not chosen yet */
 	float routeS;			/* free-form road: how far along it the object is, 0 = not known */
 	UInt8 onBridge;			/* free-form road: driving on a bridge (falls off its sides) */
+	void *ownTrack;			/* highway traffic: its own track (tTrackInfo), NULL = the road's */
 	float panicTurnDir;		/* heading at which the turn is complete */
 	/* LAN: the host simulates the world and sends it to the clients */
 	SInt16 typeRes;			/* resource id of type */
@@ -144,6 +145,10 @@ typedef struct{
 	UInt32 rageUntil;		/* rammed by a driver: chases him until this frame */
 	UInt32 warUntil;		/* car war crate: rams warTargetId until this frame */
 	UInt16 warTargetId;
+	UInt32 stuckSince;		/* highway traffic: frame since which it has not moved, 0 = moving */
+	float laneLat;			/* highway traffic: where across the carriageway it is heading for (eases to its lane) */
+	UInt8 laneLatSet;		/* laneLat is valid */
+	UInt32 laneUntil;		/* highway traffic: no new lane change before this frame */
 } tObject;
 
 enum{
